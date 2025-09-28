@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 28, 2025 at 03:57 PM
+-- Generation Time: Sep 28, 2025 at 04:02 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -45,6 +45,16 @@ CREATE TABLE `categorias` (
 INSERT INTO `categorias` (`id`, `usuario_id`, `nombre`, `tipo`, `icono`, `color`, `creado_en`, `actualizado_en`) VALUES
 (2, 1, 'test', 'ingreso', 'fa-money-bill-wave', '#8AC24A', '2025-09-15 01:07:00', '2025-09-15 01:07:00');
 
+--
+-- Triggers `categorias`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_timestamp_categorias` BEFORE UPDATE ON `categorias` FOR EACH ROW BEGIN
+    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
+
 -- --------------------------------------------------------
 
 --
@@ -72,6 +82,12 @@ INSERT INTO `cuentas` (`id`, `usuario_id`, `nombre`, `saldo`, `moneda`, `activa`
 --
 -- Triggers `cuentas`
 --
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_timestamp_cuentas` BEFORE UPDATE ON `cuentas` FOR EACH ROW BEGIN
+    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
 DELIMITER $$
 CREATE TRIGGER `trg_desactivar_cuenta_saldo_negativo` AFTER UPDATE ON `cuentas` FOR EACH ROW BEGIN
     IF NEW.saldo < 0 AND NEW.activa = TRUE THEN
@@ -102,6 +118,16 @@ CREATE TABLE `presupuestos` (
   `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
+
+--
+-- Triggers `presupuestos`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_timestamp_presupuestos` BEFORE UPDATE ON `presupuestos` FOR EACH ROW BEGIN
+    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -207,6 +233,16 @@ CREATE TABLE `usuarios` (
 INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `activo`, `creado_en`, `actualizado_en`) VALUES
 (1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 1, '2025-09-15 01:18:33', '2025-09-15 02:09:11'),
 (2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 2, 1, '2025-09-15 02:07:33', NULL);
+
+--
+-- Triggers `usuarios`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_timestamp_usuarios` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
+    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
 
 --
 -- Indexes for dumped tables
