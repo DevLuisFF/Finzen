@@ -9,9 +9,16 @@ $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION["user_id"];
 
 // Función para formatear dinero
-function formatMoney($amount, $withSymbol = true) {
-    $formatted = number_format($amount / 100, 0, ',', '.');
-    return $withSymbol ? '₲ ' . $formatted : $formatted;
+function formatMoney($amount) {
+    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+}
+
+// Función para convertir entrada de dinero a centavos
+function parseMoneyInput($input) {
+    // Remover caracteres no numéricos excepto puntos
+    $clean = preg_replace('/[^\d.]/', '', $input);
+    // Convertir a float y luego a centavos
+    return (int)round(floatval(str_replace('.', '', $clean)) * 100);
 }
 
 // Clase para manejar transacciones
@@ -26,15 +33,16 @@ class TransactionRepository {
         $query = "
             SELECT t.*,
                    c.nombre AS cuenta_nombre,
+                   c.moneda AS cuenta_moneda,
                    cat.nombre AS categoria_nombre,
                    cat.tipo AS tipo_categoria,
-                   cat.color AS categoria_color
+                   cat.color AS categoria_color,
+                   cat.icono AS categoria_icono
             FROM transacciones t
-            LEFT JOIN cuentas c ON t.cuenta_id = c.id
-            LEFT JOIN categorias cat ON t.categoria_id = cat.id
-            WHERE t.cuenta_id IN (
-                SELECT id FROM cuentas WHERE usuario_id = :usuario_id
-            )
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
+            WHERE c.usuario_id = :usuario_id
+            AND c.activa = TRUE
         ";
 
         $params = [':usuario_id' => $userId];
@@ -52,7 +60,7 @@ class TransactionRepository {
             $query .= " AND cat.tipo = :tipo";
             $params[':tipo'] = $filters['tipo'];
         }
-        if (!empty($filters['recurrente'])) {
+        if (isset($filters['recurrente'])) {
             $query .= " AND t.recurrente = :recurrente";
             $params[':recurrente'] = $filters['recurrente'];
         }
@@ -66,7 +74,8 @@ class TransactionRepository {
         }
 
         // Contar total para paginación
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM ($query) AS filtered");
+        $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
+        $countStmt = $this->db->prepare($countQuery);
         foreach ($params as $key => $value) {
             $countStmt->bindValue($key, $value);
         }
@@ -90,6 +99,56 @@ class TransactionRepository {
         ];
     }
 
+    public function getStats($userId, $filters = []) {
+        $query = "
+            SELECT 
+                COUNT(*) as total_transacciones,
+                COALESCE(SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE 0 END), 0) as total_ingresos,
+                COALESCE(SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) as total_gastos,
+                COALESCE(SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE -t.monto END), 0) as balance
+            FROM transacciones t
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
+            WHERE c.usuario_id = :usuario_id
+            AND c.activa = TRUE
+        ";
+
+        $params = [':usuario_id' => $userId];
+
+        // Aplicar filtros
+        if (!empty($filters['cuenta_id'])) {
+            $query .= " AND t.cuenta_id = :cuenta_id";
+            $params[':cuenta_id'] = $filters['cuenta_id'];
+        }
+        if (!empty($filters['categoria_id'])) {
+            $query .= " AND t.categoria_id = :categoria_id";
+            $params[':categoria_id'] = $filters['categoria_id'];
+        }
+        if (!empty($filters['tipo'])) {
+            $query .= " AND cat.tipo = :tipo";
+            $params[':tipo'] = $filters['tipo'];
+        }
+        if (isset($filters['recurrente'])) {
+            $query .= " AND t.recurrente = :recurrente";
+            $params[':recurrente'] = $filters['recurrente'];
+        }
+        if (!empty($filters['fecha_desde'])) {
+            $query .= " AND t.fecha >= :fecha_desde";
+            $params[':fecha_desde'] = $filters['fecha_desde'];
+        }
+        if (!empty($filters['fecha_hasta'])) {
+            $query .= " AND t.fecha <= :fecha_hasta";
+            $params[':fecha_hasta'] = $filters['fecha_hasta'];
+        }
+
+        $stmt = $this->db->prepare($query);
+        foreach ($params as $key => $value) {
+            $stmt->bindValue($key, $value);
+        }
+        $stmt->execute();
+        return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
     public function create($data) {
         $stmt = $this->db->prepare("
             INSERT INTO transacciones
@@ -111,7 +170,8 @@ class TransactionRepository {
                 fecha = :fecha,
                 recurrente = :recurrente,
                 actualizado_en = NOW()
-            WHERE id = :id AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
+            WHERE id = :id 
+            AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
         ");
         $data['usuario_id'] = $_SESSION["user_id"];
         return $stmt->execute($data);
@@ -120,7 +180,8 @@ class TransactionRepository {
     public function delete($id, $userId) {
         $stmt = $this->db->prepare("
             DELETE FROM transacciones
-            WHERE id = :id AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
+            WHERE id = :id 
+            AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
         ");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
@@ -128,20 +189,32 @@ class TransactionRepository {
 
 // Configuración inicial
 $transactionRepo = new TransactionRepository($db);
+$error = '';
+$success = '';
 
-// Obtener cuentas del usuario
-$stmtCuentas = $db->prepare("SELECT id, nombre FROM cuentas WHERE usuario_id = :usuario_id");
+// Obtener cuentas activas del usuario
+$stmtCuentas = $db->prepare("
+    SELECT id, nombre, moneda 
+    FROM cuentas 
+    WHERE usuario_id = :usuario_id AND activa = TRUE 
+    ORDER BY nombre
+");
 $stmtCuentas->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
 $stmtCuentas->execute();
 $cuentas = $stmtCuentas->fetchAll();
 
 // Obtener categorías del usuario
-$stmtCategorias = $db->prepare("SELECT id, nombre, tipo FROM categorias WHERE usuario_id = :usuario_id");
+$stmtCategorias = $db->prepare("
+    SELECT id, nombre, tipo, color, icono 
+    FROM categorias 
+    WHERE usuario_id = :usuario_id 
+    ORDER BY tipo, nombre
+");
 $stmtCategorias->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
 $stmtCategorias->execute();
 $categorias = $stmtCategorias->fetchAll();
 
-// Tipos de transacciones
+// Tipos de transacciones según esquema
 $tipos = [
     "ingreso" => "Ingreso",
     "gasto" => "Gasto",
@@ -149,23 +222,29 @@ $tipos = [
 
 // Procesar operaciones CRUD
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $monto = str_replace(['₲', '.', ',', ' '], '', $_POST["monto"] ?? '0');
     $data = [
         'cuenta_id' => $_POST["cuenta_id"] ?? null,
         'categoria_id' => $_POST["categoria_id"] ?? null,
-        'monto' => intval($monto) * 100,
+        'monto' => parseMoneyInput($_POST["monto"] ?? "0"),
         'descripcion' => trim($_POST["descripcion"] ?? ""),
         'fecha' => $_POST["fecha"] ?? date("Y-m-d"),
         'recurrente' => isset($_POST["recurrente"]) ? 1 : 0
     ];
 
-    if (isset($_POST["create"])) {
-        $transactionRepo->create($data);
+    try {
+        if (isset($_POST["create"]) && $data['cuenta_id'] && $data['categoria_id']) {
+            $transactionRepo->create($data);
+            $_SESSION['success'] = 'Transacción creada exitosamente';
+        }
+        if (isset($_POST["update"]) && isset($_POST["id"])) {
+            $data['id'] = $_POST["id"];
+            $transactionRepo->update($data['id'], $data);
+            $_SESSION['success'] = 'Transacción actualizada exitosamente';
+        }
+    } catch (Exception $e) {
+        $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
-    if (isset($_POST["update"])) {
-        $data['id'] = $_POST["id"];
-        $transactionRepo->update($data['id'], $data);
-    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
@@ -174,8 +253,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
     $transactionRepo->delete($id, $usuario_id);
+    $_SESSION['success'] = 'Transacción eliminada exitosamente';
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
+}
+
+// Mostrar mensajes de éxito/error
+if (isset($_SESSION['success'])) {
+    $success = $_SESSION['success'];
+    unset($_SESSION['success']);
+}
+if (isset($_SESSION['error'])) {
+    $error = $_SESSION['error'];
+    unset($_SESSION['error']);
 }
 
 // Obtener filtros de la URL
@@ -198,6 +288,9 @@ $result = $transactionRepo->getAll($usuario_id, $filters, $perPage, $offset);
 $transacciones = $result['data'];
 $totalTransacciones = $result['total'];
 $totalPages = ceil($totalTransacciones / $perPage);
+
+// Obtener estadísticas
+$stats = $transactionRepo->getStats($usuario_id, $filters);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -209,8 +302,6 @@ $totalPages = ceil($totalTransacciones / $perPage);
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
             --bs-primary: #0d6efd;
@@ -245,37 +336,45 @@ $totalPages = ceil($totalTransacciones / $perPage);
             background-color: var(--bs-primary);
             border-color: var(--bs-primary);
         }
-        .form-select-custom {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            background-size: 16px 12px;
-        }
         .category-icon {
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-right: 8px;
+            margin-right: 10px;
             color: white;
-            font-size: 0.8rem;
+            font-size: 0.9rem;
         }
         .amount.ingreso {
             color: var(--bs-success);
-            font-weight: 500;
+            font-weight: 600;
         }
         .amount.gasto {
             color: var(--bs-danger);
-            font-weight: 500;
+            font-weight: 600;
         }
         .transaction-item {
             transition: background-color 0.2s;
         }
         .transaction-item:hover {
             background-color: rgba(0,0,0,0.025);
+        }
+        .stats-card {
+            border-left: 4px solid;
+        }
+        .stats-card.primary {
+            border-left-color: var(--bs-primary);
+        }
+        .stats-card.success {
+            border-left-color: var(--bs-success);
+        }
+        .stats-card.danger {
+            border-left-color: var(--bs-danger);
+        }
+        .stats-card.warning {
+            border-left-color: var(--bs-warning);
         }
         @media (max-width: 768px) {
             .navbar-nav {
@@ -327,6 +426,9 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     </li>
                 </ul>
                 <div class="d-flex">
+                    <a href="?export=csv" class="btn btn-outline-success me-2">
+                        <i class="bi bi-download me-1"></i> Exportar CSV
+                    </a>
                     <a href="../auth/logout.php" class="btn btn-outline-danger">
                         <i class="bi bi-box-arrow-right me-1"></i> Cerrar Sesión
                     </a>
@@ -347,13 +449,94 @@ $totalPages = ceil($totalTransacciones / $perPage);
             </button>
         </div>
 
+        <!-- Alertas -->
+        <?php if (!empty($success)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <i class="bi bi-check-circle me-2"></i>
+                <?= htmlspecialchars($success) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?= htmlspecialchars($error) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <!-- Estadísticas -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="card stats-card primary">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Transacciones</h6>
+                                <h3 class="text-primary mb-0"><?= $stats['total_transacciones'] ?></h3>
+                            </div>
+                            <div class="text-primary">
+                                <i class="bi bi-list-check fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card stats-card success">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Ingresos</h6>
+                                <h3 class="text-success mb-0"><?= formatMoney($stats['total_ingresos']) ?></h3>
+                            </div>
+                            <div class="text-success">
+                                <i class="bi bi-arrow-down-circle fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card stats-card danger">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Gastos</h6>
+                                <h3 class="text-danger mb-0"><?= formatMoney($stats['total_gastos']) ?></h3>
+                            </div>
+                            <div class="text-danger">
+                                <i class="bi bi-arrow-up-circle fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card stats-card warning">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Balance</h6>
+                                <h3 class="text-warning mb-0"><?= formatMoney($stats['balance']) ?></h3>
+                            </div>
+                            <div class="text-warning">
+                                <i class="bi bi-graph-up fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Filtros -->
         <div class="card mb-4">
             <div class="card-body">
                 <form method="GET" action="" class="row g-3 align-items-end">
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="cuenta_id" class="form-label">Cuenta</label>
-                        <select class="form-select form-select-custom" id="cuenta_id" name="cuenta_id">
+                        <select class="form-select" id="cuenta_id" name="cuenta_id">
                             <option value="">Todas las cuentas</option>
                             <?php foreach ($cuentas as $cuenta): ?>
                                 <option value="<?= $cuenta["id"] ?>" <?= ($filters['cuenta_id'] == $cuenta["id"]) ? 'selected' : '' ?>>
@@ -362,9 +545,9 @@ $totalPages = ceil($totalTransacciones / $perPage);
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-2">
                         <label for="categoria_id" class="form-label">Categoría</label>
-                        <select class="form-select form-select-custom" id="categoria_id" name="categoria_id">
+                        <select class="form-select" id="categoria_id" name="categoria_id">
                             <option value="">Todas las categorías</option>
                             <?php foreach ($categorias as $categoria): ?>
                                 <option value="<?= $categoria["id"] ?>" <?= ($filters['categoria_id'] == $categoria["id"]) ? 'selected' : '' ?>>
@@ -375,7 +558,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     </div>
                     <div class="col-md-2">
                         <label for="tipo" class="form-label">Tipo</label>
-                        <select class="form-select form-select-custom" id="tipo" name="tipo">
+                        <select class="form-select" id="tipo" name="tipo">
                             <option value="">Todos</option>
                             <?php foreach ($tipos as $codigo => $nombre): ?>
                                 <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
@@ -386,7 +569,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     </div>
                     <div class="col-md-2">
                         <label for="recurrente" class="form-label">Recurrente</label>
-                        <select class="form-select form-select-custom" id="recurrente" name="recurrente">
+                        <select class="form-select" id="recurrente" name="recurrente">
                             <option value="">Todos</option>
                             <option value="1" <?= ($filters['recurrente'] === 1) ? 'selected' : '' ?>>Sí</option>
                             <option value="0" <?= ($filters['recurrente'] === 0) ? 'selected' : '' ?>>No</option>
@@ -431,11 +614,11 @@ $totalPages = ceil($totalTransacciones / $perPage);
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
                                 <tr>
+                                    <th>Fecha</th>
                                     <th>Cuenta</th>
                                     <th>Categoría</th>
-                                    <th>Monto</th>
                                     <th>Descripción</th>
-                                    <th>Fecha</th>
+                                    <th class="text-end">Monto</th>
                                     <th>Recurrente</th>
                                     <th class="text-end">Acciones</th>
                                 </tr>
@@ -445,25 +628,52 @@ $totalPages = ceil($totalTransacciones / $perPage);
                                     $tipoClase = $transaccion["tipo_categoria"] === "ingreso" ? "ingreso" : "gasto";
                                 ?>
                                 <tr class="transaction-item">
-                                    <td><?= htmlspecialchars($transaccion["cuenta_nombre"] ?? "Sin cuenta") ?></td>
                                     <td>
-                                        <?php if (!empty($transaccion['categoria_color'])): ?>
-                                            <span class="category-icon" style="background-color: <?= htmlspecialchars($transaccion['categoria_color']) ?>">
-                                                <i class="fas fa-tag"></i>
-                                            </span>
-                                        <?php endif; ?>
-                                        <?= htmlspecialchars($transaccion["categoria_nombre"] ?? "Sin categoría") ?>
+                                        <strong><?= date("d/m/Y", strtotime($transaccion["fecha"])) ?></strong>
+                                        <br>
+                                        <small class="text-muted"><?= date("H:i", strtotime($transaccion["creado_en"])) ?></small>
                                     </td>
-                                    <td class="amount <?= $tipoClase ?>">
-                                        <?= $transaccion["tipo_categoria"] === "ingreso" ? '+' : '-' ?>
-                                        <?= formatMoney($transaccion["monto"]) ?>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <div class="transaction-icon bg-primary bg-opacity-10 text-primary me-2">
+                                                <i class="bi bi-wallet2"></i>
+                                            </div>
+                                            <div>
+                                                <strong><?= htmlspecialchars($transaccion["cuenta_nombre"]) ?></strong>
+                                                <br>
+                                                <small class="text-muted"><?= htmlspecialchars($transaccion["cuenta_moneda"]) ?></small>
+                                            </div>
+                                        </div>
                                     </td>
-                                    <td><?= htmlspecialchars($transaccion["descripcion"]) ?></td>
-                                    <td><?= date("d/m/Y", strtotime($transaccion["fecha"])) ?></td>
+                                    <td>
+                                        <div class="d-flex align-items-center">
+                                            <?php if (!empty($transaccion['categoria_color'])): ?>
+                                                <span class="category-icon" style="background-color: <?= htmlspecialchars($transaccion['categoria_color']) ?>">
+                                                    <i class="bi <?= htmlspecialchars($transaccion['categoria_icono'] ?? 'bi-tag') ?>"></i>
+                                                </span>
+                                            <?php endif; ?>
+                                            <div>
+                                                <span class="badge <?= $transaccion["tipo_categoria"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> badge-custom">
+                                                    <?= htmlspecialchars($tipos[$transaccion["tipo_categoria"]]) ?>
+                                                </span>
+                                                <br>
+                                                <small><?= htmlspecialchars($transaccion["categoria_nombre"]) ?></small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <?= htmlspecialchars($transaccion["descripcion"] ?: 'Sin descripción') ?>
+                                    </td>
+                                    <td class="text-end">
+                                        <span class="amount <?= $tipoClase ?>">
+                                            <?= $transaccion["tipo_categoria"] === "ingreso" ? '+' : '-' ?>
+                                            <?= formatMoney($transaccion["monto"]) ?>
+                                        </span>
+                                    </td>
                                     <td>
                                         <?php if ($transaccion["recurrente"]): ?>
                                             <span class="badge bg-primary badge-custom">
-                                                <i class="bi bi-arrow-clockwise me-1"></i> Sí
+                                                <i class="bi bi-arrow-repeat me-1"></i> Sí
                                             </span>
                                         <?php else: ?>
                                             <span class="badge bg-secondary badge-custom">No</span>
@@ -482,7 +692,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                                                             data-id="<?= $transaccion["id"] ?>"
                                                             data-cuenta_id="<?= $transaccion["cuenta_id"] ?>"
                                                             data-categoria_id="<?= $transaccion["categoria_id"] ?>"
-                                                            data-monto="<?= formatMoney($transaccion["monto"], false) ?>"
+                                                            data-monto="<?= $transaccion["monto"] / 100 ?>"
                                                             data-descripcion="<?= htmlspecialchars($transaccion["descripcion"]) ?>"
                                                             data-fecha="<?= $transaccion["fecha"] ?>"
                                                             data-recurrente="<?= $transaccion["recurrente"] ?>">
@@ -492,7 +702,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                                                 <li>
                                                     <a class="dropdown-item text-danger"
                                                        href="?delete=<?= $transaccion["id"] ?>&page=<?= $page ?>&cuenta_id=<?= $filters['cuenta_id'] ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&recurrente=<?= $filters['recurrente'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>"
-                                                       onclick="return confirm('¿Estás seguro de eliminar esta transacción?')">
+                                                       onclick="return confirm('¿Estás seguro de eliminar esta transacción?\n\nEsta acción no se puede deshacer.')">
                                                         <i class="bi bi-trash me-2"></i> Eliminar
                                                     </a>
                                                 </li>
@@ -506,6 +716,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     </div>
 
                     <!-- Paginación -->
+                    <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
@@ -533,6 +744,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                             <?php endif; ?>
                         </ul>
                     </nav>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -552,7 +764,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="cuenta_id" class="form-label">Cuenta</label>
-                            <select class="form-select form-select-custom" id="cuenta_id" name="cuenta_id" required>
+                            <select class="form-select" id="cuenta_id" name="cuenta_id" required>
                                 <option value="">Seleccionar Cuenta</option>
                                 <?php foreach ($cuentas as $cuenta): ?>
                                     <option value="<?= $cuenta["id"] ?>"><?= htmlspecialchars($cuenta["nombre"]) ?></option>
@@ -561,33 +773,28 @@ $totalPages = ceil($totalTransacciones / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="categoria_id" class="form-label">Categoría</label>
-                            <select class="form-select form-select-custom" id="categoria_id" name="categoria_id" required>
+                            <select class="form-select" id="categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
                                     <option value="<?= $categoria["id"] ?>">
-                                        <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?? $categoria["tipo"] ?>)
+                                        <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?>)
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="monto" class="form-label">Monto</label>
-                            <div class="input-group">
-                                <span class="input-group-text">₲</span>
-                                <input type="text" class="form-control" id="monto" name="monto" placeholder="Ej: 1.000.000" required>
-                            </div>
-                            <small class="text-muted">Formato: 1.000.000</small>
+                            <label for="monto" class="form-label">Monto (Guaraníes)</label>
+                            <input type="text" class="form-control" id="monto" name="monto" placeholder="Ej: 1.000.000" required>
+                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="descripcion" class="form-label">Descripción</label>
-                            <textarea class="form-control" id="descripcion" name="descripcion" rows="2" placeholder="Descripción de la transacción"></textarea>
+                            <textarea class="form-control" id="descripcion" name="descripcion" rows="2" placeholder="Descripción de la transacción" maxlength="255"></textarea>
+                            <small class="text-muted">Máximo 255 caracteres</small>
                         </div>
                         <div class="mb-3">
                             <label for="fecha" class="form-label">Fecha</label>
-                            <div class="input-group">
-                                <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                <input class="form-control" type="date" id="fecha" name="fecha" required value="<?= date("Y-m-d") ?>">
-                            </div>
+                            <input class="form-control" type="date" id="fecha" name="fecha" required value="<?= date("Y-m-d") ?>">
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="recurrente" name="recurrente">
@@ -622,7 +829,7 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="edit_cuenta_id" class="form-label">Cuenta</label>
-                            <select class="form-select form-select-custom" id="edit_cuenta_id" name="cuenta_id" required>
+                            <select class="form-select" id="edit_cuenta_id" name="cuenta_id" required>
                                 <option value="">Seleccionar Cuenta</option>
                                 <?php foreach ($cuentas as $cuenta): ?>
                                     <option value="<?= $cuenta["id"] ?>"><?= htmlspecialchars($cuenta["nombre"]) ?></option>
@@ -631,33 +838,28 @@ $totalPages = ceil($totalTransacciones / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="edit_categoria_id" class="form-label">Categoría</label>
-                            <select class="form-select form-select-custom" id="edit_categoria_id" name="categoria_id" required>
+                            <select class="form-select" id="edit_categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
                                     <option value="<?= $categoria["id"] ?>">
-                                        <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?? $categoria["tipo"] ?>)
+                                        <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?>)
                                     </option>
                                 <?php endforeach; ?>
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="edit_monto" class="form-label">Monto</label>
-                            <div class="input-group">
-                                <span class="input-group-text">₲</span>
-                                <input type="text" class="form-control" id="edit_monto" name="monto" required>
-                            </div>
-                            <small class="text-muted">Formato: 1.000.000</small>
+                            <label for="edit_monto" class="form-label">Monto (Guaraníes)</label>
+                            <input type="text" class="form-control" id="edit_monto" name="monto" required>
+                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="edit_descripcion" class="form-label">Descripción</label>
-                            <textarea class="form-control" id="edit_descripcion" name="descripcion" rows="2"></textarea>
+                            <textarea class="form-control" id="edit_descripcion" name="descripcion" rows="2" maxlength="255"></textarea>
+                            <small class="text-muted">Máximo 255 caracteres</small>
                         </div>
                         <div class="mb-3">
                             <label for="edit_fecha" class="form-label">Fecha</label>
-                            <div class="input-group">
-                                <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                <input class="form-control" type="date" id="edit_fecha" name="fecha" required>
-                            </div>
+                            <input class="form-control" type="date" id="edit_fecha" name="fecha" required>
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="edit_recurrente" name="recurrente">
@@ -688,21 +890,49 @@ $totalPages = ceil($totalTransacciones / $perPage);
                     document.getElementById('edit_id').value = this.dataset.id;
                     document.getElementById('edit_cuenta_id').value = this.dataset.cuenta_id;
                     document.getElementById('edit_categoria_id').value = this.dataset.categoria_id;
-                    document.getElementById('edit_monto').value = this.dataset.monto;
+                    
+                    // Formatear monto para mostrar con separadores de miles
+                    const monto = parseFloat(this.dataset.monto);
+                    document.getElementById('edit_monto').value = monto.toLocaleString('es-PY');
+                    
                     document.getElementById('edit_descripcion').value = this.dataset.descripcion;
                     document.getElementById('edit_fecha').value = this.dataset.fecha;
                     document.getElementById('edit_recurrente').checked = this.dataset.recurrente === '1';
                 });
             });
 
-            // Formatear input de monto para aceptar puntos como separador de miles
+            // Formatear input de monto para aceptar solo números y puntos
             document.querySelectorAll('input[name="monto"], #edit_monto').forEach(input => {
-                input.addEventListener('blur', function() {
-                    let value = this.value.replace(/\./g, '');
-                    if (value.length > 3) {
-                        value = value.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                input.addEventListener('input', function() {
+                    // Permitir solo números y puntos
+                    this.value = this.value.replace(/[^\d.]/g, '');
+                    
+                    // Evitar múltiples puntos
+                    const parts = this.value.split('.');
+                    if (parts.length > 2) {
+                        this.value = parts[0] + '.' + parts.slice(1).join('');
                     }
-                    this.value = value;
+                });
+
+                input.addEventListener('blur', function() {
+                    if (this.value) {
+                        // Formatear con separadores de miles
+                        const number = parseFloat(this.value.replace(/\./g, ''));
+                        if (!isNaN(number)) {
+                            this.value = number.toLocaleString('es-PY');
+                        }
+                    }
+                });
+            });
+
+            // Validar formulario antes de enviar
+            document.querySelectorAll('form').forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const montoInput = this.querySelector('input[name="monto"]');
+                    if (montoInput) {
+                        // Limpiar el valor para enviar solo números
+                        montoInput.value = montoInput.value.replace(/\./g, '');
+                    }
                 });
             });
         });

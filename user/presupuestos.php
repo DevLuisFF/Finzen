@@ -10,7 +10,15 @@ $usuario_id = $_SESSION["user_id"];
 
 // Función para formatear dinero
 function formatMoney($amount) {
-    return '₲ ' . number_format($amount / 100, 0, ',', '.');
+    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+}
+
+// Función para convertir entrada de dinero a centavos
+function parseMoneyInput($input) {
+    // Remover caracteres no numéricos excepto puntos
+    $clean = preg_replace('/[^\d.]/', '', $input);
+    // Convertir a float y luego a centavos
+    return (int)round(floatval(str_replace('.', '', $clean)) * 100);
 }
 
 // Clase para manejar presupuestos
@@ -28,16 +36,17 @@ class BudgetRepository {
                 u.nombre_usuario,
                 c.nombre AS categoria_nombre,
                 c.color AS categoria_color,
-                COALESCE(SUM(t.monto), 0) AS gastos_actuales
+                c.tipo AS categoria_tipo,
+                COALESCE(SUM(CASE WHEN c.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) AS gastos_actuales
             FROM
                 presupuestos p
-            LEFT JOIN
+            INNER JOIN
                 usuarios u ON p.usuario_id = u.id
-            LEFT JOIN
+            INNER JOIN
                 categorias c ON p.categoria_id = c.id
             LEFT JOIN
                 transacciones t ON p.categoria_id = t.categoria_id
-                AND t.fecha BETWEEN p.fecha_inicio AND IFNULL(p.fecha_fin, CURDATE())
+                AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE())
             WHERE
                 p.usuario_id = :usuario_id
         ";
@@ -53,13 +62,16 @@ class BudgetRepository {
             $query .= " AND p.periodo = :periodo";
             $params[':periodo'] = $filters['periodo'];
         }
-        if (!empty($filters['notificacion'])) {
+        if (isset($filters['notificacion'])) {
             $query .= " AND p.notificacion = :notificacion";
             $params[':notificacion'] = $filters['notificacion'];
         }
 
+        $query .= " GROUP BY p.id, u.nombre_usuario, c.nombre, c.color, c.tipo";
+
         // Contar total para paginación
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM ($query) AS filtered");
+        $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
+        $countStmt = $this->db->prepare($countQuery);
         foreach ($params as $key => $value) {
             $countStmt->bindValue($key, $value);
         }
@@ -67,7 +79,7 @@ class BudgetRepository {
         $total = $countStmt->fetchColumn();
 
         // Aplicar orden y paginación
-        $query .= " GROUP BY p.id ORDER BY p.fecha_inicio DESC LIMIT :limit OFFSET :offset";
+        $query .= " ORDER BY p.fecha_inicio DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($query);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
@@ -81,6 +93,27 @@ class BudgetRepository {
             'data' => $stmt->fetchAll(),
             'total' => $total
         ];
+    }
+
+    public function getTotalStats($userId) {
+        $stmt = $this->db->prepare("
+            SELECT 
+                COUNT(*) as total_presupuestos,
+                COALESCE(SUM(p.monto), 0) as total_presupuestado,
+                COALESCE(SUM(
+                    CASE WHEN c.tipo = 'gasto' THEN 
+                        (SELECT COALESCE(SUM(t.monto), 0) 
+                         FROM transacciones t 
+                         WHERE t.categoria_id = p.categoria_id 
+                         AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE()))
+                    ELSE 0 END
+                ), 0) as total_gastado
+            FROM presupuestos p
+            INNER JOIN categorias c ON p.categoria_id = c.id
+            WHERE p.usuario_id = :usuario_id
+        ");
+        $stmt->execute([':usuario_id' => $userId]);
+        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
     public function create($data) {
@@ -115,7 +148,7 @@ class BudgetRepository {
     }
 }
 
-// Períodos disponibles
+// Períodos disponibles según esquema
 $periodos = [
     "mensual" => "Mensual",
     "anual" => "Anual",
@@ -123,32 +156,61 @@ $periodos = [
 
 // Configuración inicial
 $budgetRepo = new BudgetRepository($db);
+$error = '';
+$success = '';
 
-// Obtener categorías del usuario
-$stmtCategorias = $db->prepare("SELECT id, nombre FROM categorias WHERE usuario_id = :usuario_id");
+// Obtener categorías del usuario (solo de gastos para presupuestos)
+$stmtCategorias = $db->prepare("
+    SELECT id, nombre, color, tipo 
+    FROM categorias 
+    WHERE usuario_id = :usuario_id AND tipo = 'gasto'
+    ORDER BY nombre
+");
 $stmtCategorias->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
 $stmtCategorias->execute();
 $categorias = $stmtCategorias->fetchAll();
 
 // Procesar operaciones CRUD
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
-    $monto = str_replace(['₲', '.', ' '], '', $_POST["monto"] ?? '0');
     $data = [
         'usuario_id' => $usuario_id,
         'categoria_id' => $_POST["categoria_id"] ?? null,
-        'monto' => intval($monto) * 100,
+        'monto' => parseMoneyInput($_POST["monto"] ?? "0"),
         'periodo' => $_POST["periodo"] ?? "mensual",
         'fecha_inicio' => $_POST["fecha_inicio"] ?? null,
         'fecha_fin' => $_POST["fecha_fin"] ?? null,
         'notificacion' => isset($_POST["notificacion"]) ? 1 : 0
     ];
 
-    if (isset($_POST["create"]) && $data['categoria_id']) {
-        $budgetRepo->create($data);
+    try {
+        if (isset($_POST["create"]) && $data['categoria_id']) {
+            // Validar que no exista un presupuesto activo para la misma categoría
+            $stmtCheck = $db->prepare("
+                SELECT COUNT(*) FROM presupuestos 
+                WHERE usuario_id = :usuario_id 
+                AND categoria_id = :categoria_id 
+                AND (fecha_fin IS NULL OR fecha_fin >= CURDATE())
+            ");
+            $stmtCheck->execute([
+                ':usuario_id' => $usuario_id,
+                ':categoria_id' => $data['categoria_id']
+            ]);
+            
+            if ($stmtCheck->fetchColumn() > 0) {
+                $_SESSION['error'] = 'Ya existe un presupuesto activo para esta categoría';
+            } else {
+                $budgetRepo->create($data);
+                $_SESSION['success'] = 'Presupuesto creado exitosamente';
+            }
+        }
+        if (isset($_POST["update"]) && isset($_POST["id"])) {
+            $budgetRepo->update($_POST["id"], $data);
+            $_SESSION['success'] = 'Presupuesto actualizado exitosamente';
+        }
+    } catch (Exception $e) {
+        $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
-    if (isset($_POST["update"]) && isset($_POST["id"])) {
-        $budgetRepo->update($_POST["id"], $data);
-    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
@@ -157,8 +219,19 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
     $budgetRepo->delete($id, $usuario_id);
+    $_SESSION['success'] = 'Presupuesto eliminado exitosamente';
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
+}
+
+// Mostrar mensajes de éxito/error
+if (isset($_SESSION['success'])) {
+    $success = $_SESSION['success'];
+    unset($_SESSION['success']);
+}
+if (isset($_SESSION['error'])) {
+    $error = $_SESSION['error'];
+    unset($_SESSION['error']);
 }
 
 // Obtener filtros de la URL
@@ -178,6 +251,9 @@ $result = $budgetRepo->getAll($usuario_id, $filters, $perPage, $offset);
 $presupuestos = $result['data'];
 $totalPresupuestos = $result['total'];
 $totalPages = ceil($totalPresupuestos / $perPage);
+
+// Obtener estadísticas totales
+$stats = $budgetRepo->getTotalStats($usuario_id);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -189,8 +265,6 @@ $totalPages = ceil($totalPresupuestos / $perPage);
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
             --bs-primary: #0d6efd;
@@ -219,15 +293,15 @@ $totalPages = ceil($totalPresupuestos / $perPage);
             padding: 0.35em 0.65em;
         }
         .progress-container {
-            height: 6px;
+            height: 8px;
             background-color: #e9ecef;
-            border-radius: 3px;
+            border-radius: 4px;
             margin-top: 0.5rem;
             overflow: hidden;
         }
         .progress-bar {
             height: 100%;
-            border-radius: 3px;
+            border-radius: 4px;
             transition: width 0.6s ease;
         }
         .progress-success {
@@ -246,23 +320,28 @@ $totalPages = ceil($totalPresupuestos / $perPage);
             background-color: var(--bs-primary);
             border-color: var(--bs-primary);
         }
-        .form-select-custom {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            background-size: 16px 12px;
-        }
         .category-icon {
-            width: 24px;
-            height: 24px;
-            border-radius: 4px;
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-right: 8px;
+            margin-right: 10px;
             color: white;
-            font-size: 0.8rem;
+            font-size: 0.9rem;
+        }
+        .stats-card {
+            border-left: 4px solid var(--bs-primary);
+        }
+        .stats-card.success {
+            border-left-color: var(--bs-success);
+        }
+        .stats-card.danger {
+            border-left-color: var(--bs-danger);
+        }
+        .stats-card.warning {
+            border-left-color: var(--bs-warning);
         }
         @media (max-width: 768px) {
             .navbar-nav {
@@ -270,9 +349,6 @@ $totalPages = ceil($totalPresupuestos / $perPage);
             }
             .nav-item {
                 margin-right: 0.5rem;
-            }
-            .budget-card {
-                margin-bottom: 1rem;
             }
         }
     </style>
@@ -330,11 +406,77 @@ $totalPages = ceil($totalPresupuestos / $perPage);
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h1 class="mb-1">Mis Presupuestos</h1>
-                <p class="text-muted mb-0">Controla tus gastos e ingresos planificados</p>
+                <p class="text-muted mb-0">Controla tus gastos planificados</p>
             </div>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addBudgetModal">
                 <i class="bi bi-plus-circle me-1"></i> Nuevo Presupuesto
             </button>
+        </div>
+
+        <!-- Alertas -->
+        <?php if (!empty($success)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <i class="bi bi-check-circle me-2"></i>
+                <?= htmlspecialchars($success) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?= htmlspecialchars($error) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <!-- Estadísticas -->
+        <div class="row mb-4">
+            <div class="col-md-4">
+                <div class="card stats-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Presupuestos</h6>
+                                <h3 class="text-primary mb-0"><?= $stats['total_presupuestos'] ?></h3>
+                            </div>
+                            <div class="text-primary">
+                                <i class="bi bi-pie-chart fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card stats-card success">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Presupuestado</h6>
+                                <h3 class="text-success mb-0"><?= formatMoney($stats['total_presupuestado']) ?></h3>
+                            </div>
+                            <div class="text-success">
+                                <i class="bi bi-cash-coin fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card stats-card danger">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Total Gastado</h6>
+                                <h3 class="text-danger mb-0"><?= formatMoney($stats['total_gastado']) ?></h3>
+                            </div>
+                            <div class="text-danger">
+                                <i class="bi bi-graph-up-arrow fs-2"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Filtros -->
@@ -343,7 +485,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                 <form method="GET" action="" class="row g-3 align-items-end">
                     <div class="col-md-3">
                         <label for="categoria_id" class="form-label">Categoría</label>
-                        <select class="form-select form-select-custom" id="categoria_id" name="categoria_id">
+                        <select class="form-select" id="categoria_id" name="categoria_id">
                             <option value="">Todas las categorías</option>
                             <?php foreach ($categorias as $categoria): ?>
                                 <option value="<?= $categoria["id"] ?>" <?= ($filters['categoria_id'] == $categoria["id"]) ? 'selected' : '' ?>>
@@ -354,7 +496,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                     </div>
                     <div class="col-md-3">
                         <label for="periodo" class="form-label">Período</label>
-                        <select class="form-select form-select-custom" id="periodo" name="periodo">
+                        <select class="form-select" id="periodo" name="periodo">
                             <option value="">Todos los períodos</option>
                             <?php foreach ($periodos as $codigo => $nombre): ?>
                                 <option value="<?= $codigo ?>" <?= ($filters['periodo'] === $codigo) ? 'selected' : '' ?>>
@@ -365,13 +507,13 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                     </div>
                     <div class="col-md-3">
                         <label for="notificacion" class="form-label">Notificación</label>
-                        <select class="form-select form-select-custom" id="notificacion" name="notificacion">
+                        <select class="form-select" id="notificacion" name="notificacion">
                             <option value="">Todos</option>
                             <option value="1" <?= ($filters['notificacion'] === 1) ? 'selected' : '' ?>>Con notificación</option>
                             <option value="0" <?= ($filters['notificacion'] === 0) ? 'selected' : '' ?>>Sin notificación</option>
                         </select>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-3">
                         <button type="submit" class="btn btn-primary w-100">
                             <i class="bi bi-funnel me-1"></i> Filtrar
                         </button>
@@ -385,7 +527,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
             <div class="card-body">
                 <?php if (empty($presupuestos)): ?>
                     <div class="text-center py-5">
-                        <i class="bi bi-pie-chart-fill display-4 text-muted mb-3"></i>
+                        <i class="bi bi-pie-chart display-4 text-muted mb-3"></i>
                         <h3 class="mb-2">No se encontraron presupuestos</h3>
                         <p class="text-muted mb-4">No hay presupuestos que coincidan con los filtros seleccionados</p>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addBudgetModal">
@@ -409,23 +551,34 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                             </thead>
                             <tbody>
                                 <?php foreach ($presupuestos as $presupuesto):
-                                    $progreso = min(100, ($presupuesto["gastos_actuales"] / $presupuesto["monto"]) * 100);
+                                    $progreso = $presupuesto["monto"] > 0 ? min(100, ($presupuesto["gastos_actuales"] / $presupuesto["monto"]) * 100) : 0;
                                     $progresoClase = $progreso > 90 ? 'progress-danger' :
                                                     ($progreso > 70 ? 'progress-warning' : 'progress-success');
+                                    $restante = $presupuesto["monto"] - $presupuesto["gastos_actuales"];
                                 ?>
                                 <tr>
                                     <td>
                                         <div class="d-flex align-items-center">
                                             <?php if (!empty($presupuesto['categoria_color'])): ?>
                                                 <span class="category-icon" style="background-color: <?= htmlspecialchars($presupuesto['categoria_color']) ?>">
-                                                    <i class="fas fa-tag"></i>
+                                                    <i class="bi bi-tag"></i>
                                                 </span>
                                             <?php endif; ?>
-                                            <strong><?= htmlspecialchars($presupuesto["categoria_nombre"] ?? "Sin categoría") ?></strong>
+                                            <div>
+                                                <strong><?= htmlspecialchars($presupuesto["categoria_nombre"]) ?></strong>
+                                                <br>
+                                                <small class="text-muted">Restante: <?= formatMoney($restante) ?></small>
+                                            </div>
                                         </div>
                                     </td>
-                                    <td><?= formatMoney($presupuesto["monto"]) ?></td>
-                                    <td><?= formatMoney($presupuesto["gastos_actuales"]) ?></td>
+                                    <td>
+                                        <span class="fw-bold"><?= formatMoney($presupuesto["monto"]) ?></span>
+                                    </td>
+                                    <td>
+                                        <span class="<?= $presupuesto["gastos_actuales"] > 0 ? 'text-danger' : 'text-muted' ?>">
+                                            <?= formatMoney($presupuesto["gastos_actuales"]) ?>
+                                        </span>
+                                    </td>
                                     <td>
                                         <div class="progress-container">
                                             <div class="progress-bar <?= $progresoClase ?>" style="width: <?= $progreso ?>%">
@@ -440,12 +593,18 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                                         </span>
                                     </td>
                                     <td>
-                                        <?= date("d/m/Y", strtotime($presupuesto["fecha_inicio"])) ?> -
-                                        <?= $presupuesto["fecha_fin"] ? date("d/m/Y", strtotime($presupuesto["fecha_fin"])) : 'Indefinido' ?>
+                                        <small>
+                                            <?= date("d/m/Y", strtotime($presupuesto["fecha_inicio"])) ?>
+                                            <?php if ($presupuesto["fecha_fin"]): ?>
+                                                <br>al <?= date("d/m/Y", strtotime($presupuesto["fecha_fin"])) ?>
+                                            <?php else: ?>
+                                                <br><span class="text-muted">Sin fecha fin</span>
+                                            <?php endif; ?>
+                                        </small>
                                     </td>
                                     <td>
                                         <?php if ($presupuesto["notificacion"]): ?>
-                                            <span class="badge bg-primary badge-custom">
+                                            <span class="badge bg-success badge-custom">
                                                 <i class="bi bi-bell-fill me-1"></i> Activa
                                             </span>
                                         <?php else: ?>
@@ -466,7 +625,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                                                             data-bs-target="#editBudgetModal"
                                                             data-id="<?= $presupuesto["id"] ?>"
                                                             data-categoria_id="<?= $presupuesto["categoria_id"] ?>"
-                                                            data-monto="<?= formatMoney($presupuesto["monto"]) ?>"
+                                                            data-monto="<?= $presupuesto["monto"] / 100 ?>"
                                                             data-periodo="<?= $presupuesto["periodo"] ?>"
                                                             data-fecha_inicio="<?= $presupuesto["fecha_inicio"] ?>"
                                                             data-fecha_fin="<?= $presupuesto["fecha_fin"] ?>"
@@ -477,7 +636,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                                                 <li>
                                                     <a class="dropdown-item text-danger"
                                                        href="?delete=<?= $presupuesto["id"] ?>&page=<?= $page ?>&categoria_id=<?= $filters['categoria_id'] ?>&periodo=<?= $filters['periodo'] ?>&notificacion=<?= $filters['notificacion'] ?>"
-                                                       onclick="return confirm('¿Estás seguro de eliminar este presupuesto?')">
+                                                       onclick="return confirm('¿Estás seguro de eliminar este presupuesto?\n\nEsta acción no se puede deshacer.')">
                                                         <i class="bi bi-trash me-2"></i> Eliminar
                                                     </a>
                                                 </li>
@@ -491,6 +650,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                     </div>
 
                     <!-- Paginación -->
+                    <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
@@ -518,6 +678,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                             <?php endif; ?>
                         </ul>
                     </nav>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -538,24 +699,22 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="categoria_id" class="form-label">Categoría</label>
-                            <select class="form-select form-select-custom" id="categoria_id" name="categoria_id" required>
+                            <select class="form-select" id="categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
                                     <option value="<?= $categoria["id"] ?>"><?= htmlspecialchars($categoria["nombre"]) ?></option>
                                 <?php endforeach; ?>
                             </select>
+                            <small class="text-muted">Solo se muestran categorías de gastos</small>
                         </div>
                         <div class="mb-3">
-                            <label for="monto" class="form-label">Monto Presupuestado</label>
-                            <div class="input-group">
-                                <span class="input-group-text">₲</span>
-                                <input type="text" class="form-control" id="monto" name="monto" placeholder="Ej: 1.000.000" required>
-                            </div>
-                            <small class="text-muted">Formato: 1.000.000</small>
+                            <label for="monto" class="form-label">Monto Presupuestado (Guaraníes)</label>
+                            <input type="text" class="form-control" id="monto" name="monto" placeholder="Ej: 1.000.000" required>
+                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="periodo" class="form-label">Período</label>
-                            <select class="form-select form-select-custom" id="periodo" name="periodo" required>
+                            <select class="form-select" id="periodo" name="periodo" required>
                                 <option value="">Seleccionar Período</option>
                                 <?php foreach ($periodos as $codigo => $nombre): ?>
                                     <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
@@ -565,23 +724,18 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                         <div class="row mb-3">
                             <div class="col-md-6">
                                 <label for="fecha_inicio" class="form-label">Fecha Inicio</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                    <input class="form-control" type="date" id="fecha_inicio" name="fecha_inicio" required>
-                                </div>
+                                <input class="form-control" type="date" id="fecha_inicio" name="fecha_inicio" required>
                             </div>
                             <div class="col-md-6">
-                                <label for="fecha_fin" class="form-label">Fecha Fin</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                    <input class="form-control" type="date" id="fecha_fin" name="fecha_fin">
-                                </div>
+                                <label for="fecha_fin" class="form-label">Fecha Fin (Opcional)</label>
+                                <input class="form-control" type="date" id="fecha_fin" name="fecha_fin">
+                                <small class="text-muted">Dejar vacío para presupuesto indefinido</small>
                             </div>
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="notificacion" name="notificacion" checked>
                             <label class="form-check-label" for="notificacion">
-                                Activar notificaciones
+                                Activar notificaciones cuando se acerque al límite
                             </label>
                         </div>
                     </div>
@@ -612,7 +766,7 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="edit_categoria_id" class="form-label">Categoría</label>
-                            <select class="form-select form-select-custom" id="edit_categoria_id" name="categoria_id" required>
+                            <select class="form-select" id="edit_categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
                                     <option value="<?= $categoria["id"] ?>"><?= htmlspecialchars($categoria["nombre"]) ?></option>
@@ -620,16 +774,13 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="edit_monto" class="form-label">Monto Presupuestado</label>
-                            <div class="input-group">
-                                <span class="input-group-text">₲</span>
-                                <input type="text" class="form-control" id="edit_monto" name="monto" required>
-                            </div>
-                            <small class="text-muted">Formato: 1.000.000</small>
+                            <label for="edit_monto" class="form-label">Monto Presupuestado (Guaraníes)</label>
+                            <input type="text" class="form-control" id="edit_monto" name="monto" required>
+                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="edit_periodo" class="form-label">Período</label>
-                            <select class="form-select form-select-custom" id="edit_periodo" name="periodo" required>
+                            <select class="form-select" id="edit_periodo" name="periodo" required>
                                 <option value="">Seleccionar Período</option>
                                 <?php foreach ($periodos as $codigo => $nombre): ?>
                                     <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
@@ -639,23 +790,18 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                         <div class="row mb-3">
                             <div class="col-md-6">
                                 <label for="edit_fecha_inicio" class="form-label">Fecha Inicio</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                    <input class="form-control" type="date" id="edit_fecha_inicio" name="fecha_inicio" required>
-                                </div>
+                                <input class="form-control" type="date" id="edit_fecha_inicio" name="fecha_inicio" required>
                             </div>
                             <div class="col-md-6">
-                                <label for="edit_fecha_fin" class="form-label">Fecha Fin</label>
-                                <div class="input-group">
-                                    <span class="input-group-text"><i class="bi bi-calendar"></i></span>
-                                    <input class="form-control" type="date" id="edit_fecha_fin" name="fecha_fin">
-                                </div>
+                                <label for="edit_fecha_fin" class="form-label">Fecha Fin (Opcional)</label>
+                                <input class="form-control" type="date" id="edit_fecha_fin" name="fecha_fin">
+                                <small class="text-muted">Dejar vacío para presupuesto indefinido</small>
                             </div>
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="edit_notificacion" name="notificacion">
                             <label class="form-check-label" for="edit_notificacion">
-                                Activar notificaciones
+                                Activar notificaciones cuando se acerque al límite
                             </label>
                         </div>
                     </div>
@@ -680,7 +826,11 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                 button.addEventListener('click', function() {
                     document.getElementById('edit_id').value = this.dataset.id;
                     document.getElementById('edit_categoria_id').value = this.dataset.categoria_id;
-                    document.getElementById('edit_monto').value = this.dataset.monto;
+                    
+                    // Formatear monto para mostrar con separadores de miles
+                    const monto = parseFloat(this.dataset.monto);
+                    document.getElementById('edit_monto').value = monto.toLocaleString('es-PY');
+                    
                     document.getElementById('edit_periodo').value = this.dataset.periodo;
                     document.getElementById('edit_fecha_inicio').value = this.dataset.fecha_inicio;
                     document.getElementById('edit_fecha_fin').value = this.dataset.fecha_fin || '';
@@ -688,45 +838,44 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                 });
             });
 
-            // Configurar fechas basadas en el período seleccionado (nuevo presupuesto)
-            const periodoSelect = document.getElementById('periodo');
-            const fechaInicio = document.getElementById('fecha_inicio');
-            const fechaFin = document.getElementById('fecha_fin');
-
-            if (periodoSelect && fechaInicio && fechaFin) {
-                periodoSelect.addEventListener('change', function() {
-                    const hoy = new Date();
-                    let fechaFinDate = new Date(hoy);
-
-                    switch(this.value) {
-                        case 'mensual':
-                            fechaFinDate.setMonth(fechaFinDate.getMonth() + 1);
-                            break;
-                        case 'anual':
-                            fechaFinDate.setFullYear(fechaFinDate.getFullYear() + 1);
-                            break;
-                        default:
-                            fechaFin.value = '';
-                            return;
+            // Formatear input de monto para aceptar solo números y puntos
+            document.querySelectorAll('input[name="monto"], input[name="edit_monto"]').forEach(input => {
+                input.addEventListener('input', function() {
+                    // Permitir solo números y puntos
+                    this.value = this.value.replace(/[^\d.]/g, '');
+                    
+                    // Evitar múltiples puntos
+                    const parts = this.value.split('.');
+                    if (parts.length > 2) {
+                        this.value = parts[0] + '.' + parts.slice(1).join('');
                     }
-
-                    const formatDate = (date) => {
-                        return date.toISOString().split('T')[0];
-                    };
-
-                    fechaInicio.value = formatDate(hoy);
-                    fechaFin.value = formatDate(fechaFinDate);
                 });
+
+                input.addEventListener('blur', function() {
+                    if (this.value) {
+                        // Formatear con separadores de miles
+                        const number = parseFloat(this.value.replace(/\./g, ''));
+                        if (!isNaN(number)) {
+                            this.value = number.toLocaleString('es-PY');
+                        }
+                    }
+                });
+            });
+
+            // Configurar fecha de inicio por defecto
+            const fechaInicio = document.getElementById('fecha_inicio');
+            if (fechaInicio && !fechaInicio.value) {
+                fechaInicio.value = new Date().toISOString().split('T')[0];
             }
 
-            // Formatear input de monto para aceptar puntos como separador de miles
-            document.querySelectorAll('input[name="monto"], input[name="edit_monto"]').forEach(input => {
-                input.addEventListener('blur', function() {
-                    let value = this.value.replace(/\./g, '');
-                    if (value.length > 3) {
-                        value = value.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+            // Validar formulario antes de enviar
+            document.querySelectorAll('form').forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const montoInput = this.querySelector('input[name="monto"]');
+                    if (montoInput) {
+                        // Limpiar el valor para enviar solo números
+                        montoInput.value = montoInput.value.replace(/\./g, '');
                     }
-                    this.value = value;
                 });
             });
         });
