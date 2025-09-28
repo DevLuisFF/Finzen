@@ -8,20 +8,17 @@ require "../config/database.php";
 $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION["user_id"];
 
-// Monedas disponibles
-$monedas = [
-    "PYG" => "Guaraní Paraguayo",
-    "USD" => "Dólar Estadounidense",
-    "EUR" => "Euro",
-    "BRL" => "Real Brasileño",
-    "MXN" => "Peso Mexicano",
-    "CAD" => "Dólar Canadiense",
-    "GBP" => "Libra Esterlina",
-];
+// Función para formatear dinero en guaraníes
+function formatMoney($amount) {
+    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+}
 
-// Función para formatear dinero
-function formatMoney($amount, $currency = 'PYG') {
-    return $currency . ' ' . number_format($amount / 100, 0, ',', '.');
+// Función para convertir entrada de dinero a centavos
+function parseMoneyInput($input) {
+    // Remover caracteres no numéricos excepto puntos
+    $clean = preg_replace('/[^\d.]/', '', $input);
+    // Convertir a float y luego a centavos
+    return (int)round(floatval(str_replace('.', '', $clean)) * 100);
 }
 
 // Clase para manejar cuentas
@@ -42,10 +39,6 @@ class AccountRepository {
         $params = [':usuario_id' => $userId];
 
         // Aplicar filtros
-        if (!empty($filters['moneda'])) {
-            $query .= " AND c.moneda = :moneda";
-            $params[':moneda'] = $filters['moneda'];
-        }
         if (isset($filters['activa'])) {
             $query .= " AND c.activa = :activa";
             $params[':activa'] = $filters['activa'];
@@ -73,10 +66,20 @@ class AccountRepository {
         ];
     }
 
+    public function getTotalBalance($userId) {
+        $stmt = $this->db->prepare("
+            SELECT COALESCE(SUM(saldo), 0) as total_saldo
+            FROM cuentas 
+            WHERE usuario_id = :usuario_id AND activa = TRUE
+        ");
+        $stmt->execute([':usuario_id' => $userId]);
+        return $stmt->fetchColumn();
+    }
+
     public function create($data) {
         $stmt = $this->db->prepare("
             INSERT INTO cuentas (usuario_id, nombre, saldo, moneda, activa, creado_en, actualizado_en)
-            VALUES (:usuario_id, :nombre, :saldo, :moneda, :activa, NOW(), NOW())
+            VALUES (:usuario_id, :nombre, :saldo, 'PYG', :activa, NOW(), NOW())
         ");
         return $stmt->execute($data);
     }
@@ -87,7 +90,6 @@ class AccountRepository {
             UPDATE cuentas SET
                 nombre = :nombre,
                 saldo = :saldo,
-                moneda = :moneda,
                 activa = :activa,
                 actualizado_en = NOW()
             WHERE id = :id AND usuario_id = :usuario_id
@@ -96,6 +98,17 @@ class AccountRepository {
     }
 
     public function delete($id, $userId) {
+        // Verificar si la cuenta tiene transacciones antes de eliminar
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) FROM transacciones WHERE cuenta_id = :id
+        ");
+        $stmt->execute([':id' => $id]);
+        $hasTransactions = $stmt->fetchColumn() > 0;
+
+        if ($hasTransactions) {
+            return false; // No se puede eliminar cuenta con transacciones
+        }
+
         $stmt = $this->db->prepare("DELETE FROM cuentas WHERE id = :id AND usuario_id = :usuario_id");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
@@ -103,23 +116,30 @@ class AccountRepository {
 
 // Procesar operaciones CRUD
 $accountRepo = new AccountRepository($db);
+$error = '';
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $data = [
         'usuario_id' => $usuario_id,
         'nombre' => trim($_POST["nombre"] ?? ""),
-        'saldo' => floatval(str_replace(['.', 'PYG', 'USD', ' ', '$'], '', $_POST["saldo"] ?? 0)) * 100,
-        'moneda' => $_POST["moneda"] ?? "PYG",
+        'saldo' => parseMoneyInput($_POST["saldo"] ?? "0"),
         'activa' => isset($_POST["activa"]) ? 1 : 0
     ];
 
-    if (isset($_POST["create"]) && $data['nombre']) {
-        $accountRepo->create($data);
+    try {
+        if (isset($_POST["create"]) && $data['nombre']) {
+            $accountRepo->create($data);
+            $_SESSION['success'] = 'Cuenta creada exitosamente';
+        }
+        if (isset($_POST["update"]) && isset($_POST["id"])) {
+            $data['id'] = intval($_POST["id"]);
+            $accountRepo->update($data['id'], $data);
+            $_SESSION['success'] = 'Cuenta actualizada exitosamente';
+        }
+    } catch (Exception $e) {
+        $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
-    if (isset($_POST["update"]) && isset($_POST["id"])) {
-        $data['id'] = intval($_POST["id"]);
-        $accountRepo->update($data['id'], $data);
-    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
@@ -127,14 +147,30 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 // Eliminar cuenta
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
-    $accountRepo->delete($id, $usuario_id);
+    $success = $accountRepo->delete($id, $usuario_id);
+    
+    if ($success) {
+        $_SESSION['success'] = 'Cuenta eliminada exitosamente';
+    } else {
+        $_SESSION['error'] = 'No se puede eliminar una cuenta que tiene transacciones asociadas';
+    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
 
+// Mostrar mensajes de éxito/error
+if (isset($_SESSION['success'])) {
+    $success = $_SESSION['success'];
+    unset($_SESSION['success']);
+}
+if (isset($_SESSION['error'])) {
+    $error = $_SESSION['error'];
+    unset($_SESSION['error']);
+}
+
 // Obtener filtros de la URL
 $filters = [
-    'moneda' => $_GET['moneda'] ?? '',
     'activa' => isset($_GET['activa']) ? (int)$_GET['activa'] : null
 ];
 
@@ -148,6 +184,9 @@ $result = $accountRepo->getAll($usuario_id, $filters, $perPage, $offset);
 $cuentas = $result['data'];
 $totalCuentas = $result['total'];
 $totalPages = ceil($totalCuentas / $perPage);
+
+// Obtener saldo total
+$saldoTotal = $accountRepo->getTotalBalance($usuario_id);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -192,12 +231,11 @@ $totalPages = ceil($totalCuentas / $perPage);
             background-color: var(--bs-primary);
             border-color: var(--bs-primary);
         }
-        .form-select-custom {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            background-size: 16px 12px;
+        .saldo-total-card {
+            border-left: 4px solid var(--bs-success);
+        }
+        .account-card {
+            border-left: 4px solid var(--bs-primary);
         }
         @media (max-width: 768px) {
             .navbar-nav {
@@ -262,11 +300,47 @@ $totalPages = ceil($totalCuentas / $perPage);
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h1 class="mb-1">Mis Cuentas</h1>
-                <p class="text-muted mb-0">Gestiona tus cuentas financieras</p>
+                <p class="text-muted mb-0">Gestiona tus cuentas financieras en Guaraníes</p>
             </div>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addAccountModal">
                 <i class="bi bi-plus-circle me-1"></i> Nueva Cuenta
             </button>
+        </div>
+
+        <!-- Alertas -->
+        <?php if (isset($success)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <i class="bi bi-check-circle me-2"></i>
+                <?= htmlspecialchars($success) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?= htmlspecialchars($error) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <!-- Resumen de saldo total -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card saldo-total-card">
+                    <div class="card-body">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h5 class="card-title mb-1">Saldo Total</h5>
+                                <p class="text-muted mb-0">Sumatoria de todas tus cuentas activas</p>
+                            </div>
+                            <div class="col-md-4 text-md-end">
+                                <h2 class="text-success mb-0"><?= formatMoney($saldoTotal) ?></h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Filtros -->
@@ -274,30 +348,19 @@ $totalPages = ceil($totalCuentas / $perPage);
             <div class="card-body">
                 <form method="GET" action="" class="row g-3 align-items-end">
                     <div class="col-md-4">
-                        <label for="moneda" class="form-label">Moneda</label>
-                        <select class="form-select form-select-custom" id="moneda" name="moneda">
-                            <option value="">Todas las monedas</option>
-                            <?php foreach ($monedas as $codigo => $nombre): ?>
-                                <option value="<?= $codigo ?>" <?= ($filters['moneda'] === $codigo) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($nombre) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-md-3">
                         <label for="activa" class="form-label">Estado</label>
-                        <select class="form-select form-select-custom" id="activa" name="activa">
+                        <select class="form-select" id="activa" name="activa">
                             <option value="">Todos los estados</option>
                             <option value="1" <?= ($filters['activa'] === 1) ? 'selected' : '' ?>>Activas</option>
                             <option value="0" <?= ($filters['activa'] === 0) ? 'selected' : '' ?>>Inactivas</option>
                         </select>
                     </div>
-                    <div class="col-md-2">
+                    <div class="col-md-4">
                         <button type="submit" class="btn btn-primary w-100">
                             <i class="bi bi-funnel me-1"></i> Filtrar
                         </button>
                     </div>
-                    <div class="col-md-3 text-md-end">
+                    <div class="col-md-4 text-md-end">
                         <span class="badge bg-primary badge-custom">
                             <?= $totalCuentas ?> cuenta<?= $totalCuentas !== 1 ? 's' : '' ?>
                         </span>
@@ -325,25 +388,40 @@ $totalPages = ceil($totalCuentas / $perPage);
                                 <tr>
                                     <th>Nombre</th>
                                     <th>Saldo</th>
-                                    <th>Moneda</th>
                                     <th>Estado</th>
+                                    <th>Última Actualización</th>
                                     <th class="text-end">Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($cuentas as $cuenta): ?>
                                 <tr>
-                                    <td><strong><?= htmlspecialchars($cuenta["nombre"]) ?></strong></td>
-                                    <td><?= formatMoney($cuenta["saldo"], $cuenta["moneda"]) ?></td>
                                     <td>
-                                        <span class="badge bg-primary badge-custom">
-                                            <?= htmlspecialchars($cuenta["moneda"]) ?>
+                                        <div class="d-flex align-items-center">
+                                            <div class="transaction-icon bg-primary bg-opacity-10 text-primary me-3">
+                                                <i class="bi bi-wallet2"></i>
+                                            </div>
+                                            <div>
+                                                <strong><?= htmlspecialchars($cuenta["nombre"]) ?></strong>
+                                                <br>
+                                                <small class="text-muted">Creada: <?= date('d/m/Y', strtotime($cuenta["creado_en"])) ?></small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="fw-bold <?= $cuenta['saldo'] >= 0 ? 'text-success' : 'text-danger' ?>">
+                                            <?= formatMoney($cuenta["saldo"]) ?>
                                         </span>
                                     </td>
                                     <td>
                                         <span class="badge <?= $cuenta["activa"] ? 'bg-success' : 'bg-danger' ?> badge-custom">
                                             <?= $cuenta["activa"] ? 'Activa' : 'Inactiva' ?>
                                         </span>
+                                    </td>
+                                    <td>
+                                        <small class="text-muted">
+                                            <?= $cuenta["actualizado_en"] ? date('d/m/Y H:i', strtotime($cuenta["actualizado_en"])) : 'Nunca' ?>
+                                        </small>
                                     </td>
                                     <td class="text-end">
                                         <div class="d-flex justify-content-end gap-2">
@@ -352,14 +430,13 @@ $totalPages = ceil($totalCuentas / $perPage);
                                                     data-bs-target="#editAccountModal"
                                                     data-id="<?= $cuenta["id"] ?>"
                                                     data-nombre="<?= htmlspecialchars($cuenta["nombre"]) ?>"
-                                                    data-saldo="<?= formatMoney($cuenta["saldo"], $cuenta["moneda"]) ?>"
-                                                    data-moneda="<?= $cuenta["moneda"] ?>"
+                                                    data-saldo="<?= $cuenta["saldo"] / 100 ?>"
                                                     data-activa="<?= $cuenta["activa"] ?>">
                                                 <i class="bi bi-pencil"></i>
                                             </button>
-                                            <a href="?delete=<?= $cuenta["id"] ?>&page=<?= $page ?>&moneda=<?= $filters['moneda'] ?>&activa=<?= $filters['activa'] ?>"
+                                            <a href="?delete=<?= $cuenta["id"] ?>&page=<?= $page ?>&activa=<?= $filters['activa'] ?>"
                                                class="btn btn-sm btn-outline-danger"
-                                               onclick="return confirm('¿Estás seguro de eliminar esta cuenta?')">
+                                               onclick="return confirm('¿Estás seguro de eliminar esta cuenta?\n\nEsta acción no se puede deshacer.')">
                                                 <i class="bi bi-trash"></i>
                                             </a>
                                         </div>
@@ -371,11 +448,12 @@ $totalPages = ceil($totalCuentas / $perPage);
                     </div>
 
                     <!-- Paginación -->
+                    <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page - 1 ?>&moneda=<?= $filters['moneda'] ?>&activa=<?= $filters['activa'] ?>" aria-label="Anterior">
+                                    <a class="page-link" href="?page=<?= $page - 1 ?>&activa=<?= $filters['activa'] ?>" aria-label="Anterior">
                                         <span aria-hidden="true">&laquo;</span>
                                     </a>
                                 </li>
@@ -383,7 +461,7 @@ $totalPages = ceil($totalCuentas / $perPage);
 
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                 <li class="page-item <?= $i === $page ? 'active' : '' ?>">
-                                    <a class="page-link" href="?page=<?= $i ?>&moneda=<?= $filters['moneda'] ?>&activa=<?= $filters['activa'] ?>">
+                                    <a class="page-link" href="?page=<?= $i ?>&activa=<?= $filters['activa'] ?>">
                                         <?= $i ?>
                                     </a>
                                 </li>
@@ -391,13 +469,14 @@ $totalPages = ceil($totalCuentas / $perPage);
 
                             <?php if ($page < $totalPages): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page + 1 ?>&moneda=<?= $filters['moneda'] ?>&activa=<?= $filters['activa'] ?>" aria-label="Siguiente">
+                                    <a class="page-link" href="?page=<?= $page + 1 ?>&activa=<?= $filters['activa'] ?>" aria-label="Siguiente">
                                         <span aria-hidden="true">&raquo;</span>
                                     </a>
                                 </li>
                             <?php endif; ?>
                         </ul>
                     </nav>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -418,21 +497,12 @@ $totalPages = ceil($totalCuentas / $perPage);
                     <div class="modal-body">
                         <div class="mb-3">
                             <label for="nombre" class="form-label">Nombre de la Cuenta</label>
-                            <input type="text" class="form-control" id="nombre" name="nombre" placeholder="Ej: Cuenta Corriente" required>
+                            <input type="text" class="form-control" id="nombre" name="nombre" placeholder="Ej: Cuenta Corriente, Efectivo, etc." required>
                         </div>
                         <div class="mb-3">
-                            <label for="saldo" class="form-label">Saldo Inicial</label>
+                            <label for="saldo" class="form-label">Saldo Inicial (Guaraníes)</label>
                             <input type="text" class="form-control" id="saldo" name="saldo" placeholder="Ej: 1.000.000" required>
-                            <small class="text-muted">Formato: 1.000.000</small>
-                        </div>
-                        <div class="mb-3">
-                            <label for="moneda" class="form-label">Moneda</label>
-                            <select class="form-select form-select-custom" id="moneda" name="moneda" required>
-                                <option value="">Seleccionar Moneda</option>
-                                <?php foreach ($monedas as $codigo => $nombre): ?>
-                                    <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                            <small class="text-muted">Ingrese el saldo inicial en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="activa" name="activa" checked>
@@ -471,18 +541,9 @@ $totalPages = ceil($totalCuentas / $perPage);
                             <input type="text" class="form-control" id="edit_nombre" name="nombre" required>
                         </div>
                         <div class="mb-3">
-                            <label for="edit_saldo" class="form-label">Saldo</label>
+                            <label for="edit_saldo" class="form-label">Saldo (Guaraníes)</label>
                             <input type="text" class="form-control" id="edit_saldo" name="saldo" required>
-                            <small class="text-muted">Formato: 1.000.000</small>
-                        </div>
-                        <div class="mb-3">
-                            <label for="edit_moneda" class="form-label">Moneda</label>
-                            <select class="form-select form-select-custom" id="edit_moneda" name="moneda" required>
-                                <option value="">Seleccionar Moneda</option>
-                                <?php foreach ($monedas as $codigo => $nombre): ?>
-                                    <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                            <small class="text-muted">Saldo actual en guaraníes. Use puntos para separar miles.</small>
                         </div>
                         <div class="form-check mb-3">
                             <input class="form-check-input" type="checkbox" id="edit_activa" name="activa">
@@ -500,6 +561,7 @@ $totalPages = ceil($totalCuentas / $perPage);
                 </form>
             </div>
         </div>
+    </div>
 
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -511,20 +573,47 @@ $totalPages = ceil($totalCuentas / $perPage);
                 button.addEventListener('click', function() {
                     document.getElementById('edit_id').value = this.dataset.id;
                     document.getElementById('edit_nombre').value = this.dataset.nombre;
-                    document.getElementById('edit_saldo').value = this.dataset.saldo;
-                    document.getElementById('edit_moneda').value = this.dataset.moneda;
+                    
+                    // Formatear saldo para mostrar con separadores de miles
+                    const saldo = parseFloat(this.dataset.saldo);
+                    document.getElementById('edit_saldo').value = saldo.toLocaleString('es-PY');
+                    
                     document.getElementById('edit_activa').checked = this.dataset.activa === '1';
                 });
             });
 
-            // Formatear input de saldo para aceptar puntos como separador de miles
+            // Formatear input de saldo para aceptar solo números y puntos
             document.querySelectorAll('input[name="saldo"], input[name="edit_saldo"]').forEach(input => {
-                input.addEventListener('blur', function() {
-                    let value = this.value.replace(/\./g, '');
-                    if (value.length > 3) {
-                        value = value.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+                input.addEventListener('input', function() {
+                    // Permitir solo números y puntos
+                    this.value = this.value.replace(/[^\d.]/g, '');
+                    
+                    // Evitar múltiples puntos
+                    const parts = this.value.split('.');
+                    if (parts.length > 2) {
+                        this.value = parts[0] + '.' + parts.slice(1).join('');
                     }
-                    this.value = value;
+                });
+
+                input.addEventListener('blur', function() {
+                    if (this.value) {
+                        // Formatear con separadores de miles
+                        const number = parseFloat(this.value.replace(/\./g, ''));
+                        if (!isNaN(number)) {
+                            this.value = number.toLocaleString('es-PY');
+                        }
+                    }
+                });
+            });
+
+            // Validar formulario antes de enviar
+            document.querySelectorAll('form').forEach(form => {
+                form.addEventListener('submit', function(e) {
+                    const saldoInput = this.querySelector('input[name="saldo"], input[name="edit_saldo"]');
+                    if (saldoInput) {
+                        // Limpiar el valor para enviar solo números
+                        saldoInput.value = saldoInput.value.replace(/\./g, '');
+                    }
                 });
             });
         });
