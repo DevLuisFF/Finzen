@@ -17,10 +17,14 @@ abstract class MetricCalculator {
     abstract public function calculate($userId);
 }
 
-// Métricas específicas
+// Métricas específicas mejoradas según esquema
 class TotalAccountsMetric extends MetricCalculator {
     public function calculate($userId) {
-        $stmt = $this->db->prepare("SELECT COUNT(*) FROM cuentas WHERE usuario_id = ? AND activa = TRUE");
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) 
+            FROM cuentas 
+            WHERE usuario_id = ? AND activa = TRUE
+        ");
         $stmt->execute([$userId]);
         return $stmt->fetchColumn() ?? 0;
     }
@@ -28,29 +32,37 @@ class TotalAccountsMetric extends MetricCalculator {
 
 class TotalBalanceMetric extends MetricCalculator {
     public function calculate($userId) {
-        $stmt = $this->db->prepare("SELECT SUM(saldo) FROM cuentas WHERE usuario_id = ? AND activa = TRUE");
+        $stmt = $this->db->prepare("
+            SELECT COALESCE(SUM(saldo), 0) 
+            FROM cuentas 
+            WHERE usuario_id = ? AND activa = TRUE
+        ");
         $stmt->execute([$userId]);
-        return $stmt->fetchColumn() ?? 0;
+        return $stmt->fetchColumn();
     }
 }
 
 class IncomeExpenseMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
-            SELECT cat.tipo, SUM(t.monto) as total
+            SELECT 
+                cat.tipo, 
+                COALESCE(SUM(t.monto), 0) as total
             FROM transacciones t
-            JOIN categorias cat ON t.categoria_id = cat.id
-            JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            WHERE c.usuario_id = ? 
+            AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
+            AND c.activa = TRUE
             GROUP BY cat.tipo
         ");
         $stmt->execute([$userId]);
         $result = ['ingresos' => 0, 'gastos' => 0];
-        foreach ($stmt as $row) {
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             if ($row['tipo'] === 'ingreso') {
-                $result['ingresos'] = $row['total'];
+                $result['ingresos'] = (int)$row['total'];
             } elseif ($row['tipo'] === 'gasto') {
-                $result['gastos'] = $row['total'];
+                $result['gastos'] = (int)$row['total'];
             }
         }
         return $result;
@@ -60,38 +72,51 @@ class IncomeExpenseMetric extends MetricCalculator {
 class RecentTransactionsMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
-            SELECT t.id, t.descripcion, t.monto, t.fecha, c.nombre as cuenta, cat.nombre as categoria, cat.tipo
+            SELECT 
+                t.id,
+                t.descripcion,
+                t.monto,
+                t.fecha,
+                c.nombre as cuenta,
+                cat.nombre as categoria,
+                cat.tipo,
+                cat.color,
+                c.moneda
             FROM transacciones t
-            JOIN cuentas c ON t.cuenta_id = c.id
-            JOIN categorias cat ON t.categoria_id = cat.id
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
             WHERE c.usuario_id = ?
+            AND c.activa = TRUE
             ORDER BY t.fecha DESC, t.creado_en DESC
             LIMIT 5
         ");
         $stmt->execute([$userId]);
-        return $stmt->fetchAll();
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
 class MonthlyFlowMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
-            SELECT DATE_FORMAT(t.fecha, '%Y-%m') as mes,
-                   SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE 0 END) as ingresos,
-                   SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END) as gastos
+            SELECT 
+                DATE_FORMAT(t.fecha, '%Y-%m') as mes,
+                COALESCE(SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE 0 END), 0) as ingresos,
+                COALESCE(SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) as gastos
             FROM transacciones t
-            JOIN categorias cat ON t.categoria_id = cat.id
-            JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            WHERE c.usuario_id = ? 
+            AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
+            AND c.activa = TRUE
             GROUP BY mes
-            ORDER BY mes
+            ORDER BY mes ASC
         ");
         $stmt->execute([$userId]);
         $data = ['labels' => [], 'ingresos' => [], 'gastos' => []];
-        foreach ($stmt as $row) {
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $data['labels'][] = date('M Y', strtotime($row['mes'] . '-01'));
-            $data['ingresos'][] = $row['ingresos'];
-            $data['gastos'][] = abs($row['gastos']);
+            $data['ingresos'][] = (int)$row['ingresos'];
+            $data['gastos'][] = (int)$row['gastos'];
         }
         return $data;
     }
@@ -100,40 +125,134 @@ class MonthlyFlowMetric extends MetricCalculator {
 class ExpenseByCategoryMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
-            SELECT cat.nombre, SUM(t.monto) as total, cat.color
+            SELECT 
+                cat.nombre,
+                COALESCE(SUM(t.monto), 0) as total,
+                COALESCE(cat.color, '#6c757d') as color
             FROM transacciones t
-            JOIN categorias cat ON t.categoria_id = cat.id
-            JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? AND cat.tipo = 'gasto' AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-            GROUP BY cat.id
+            INNER JOIN categorias cat ON t.categoria_id = cat.id
+            INNER JOIN cuentas c ON t.cuenta_id = c.id
+            WHERE c.usuario_id = ? 
+            AND cat.tipo = 'gasto' 
+            AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
+            AND c.activa = TRUE
+            GROUP BY cat.id, cat.nombre, cat.color
             ORDER BY total DESC
             LIMIT 6
         ");
         $stmt->execute([$userId]);
         $data = ['labels' => [], 'data' => [], 'colors' => []];
-        foreach ($stmt as $cat) {
-            $data['labels'][] = $cat['nombre'];
-            $data['data'][] = abs($cat['total']);
-            $data['colors'][] = $cat['color'] ?? '#' . substr(md5($cat['nombre']), 0, 6);
+        while ($cat = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $data['labels'][] = htmlspecialchars($cat['nombre']);
+            $data['data'][] = abs((int)$cat['total']);
+            $data['colors'][] = $cat['color'];
         }
         return $data;
     }
 }
 
-// Obtener métricas
-$metrics = [
-    'total_cuentas' => (new TotalAccountsMetric($db))->calculate($usuario_id),
-    'saldo_total' => (new TotalBalanceMetric($db))->calculate($usuario_id),
-];
-$incomeExpense = (new IncomeExpenseMetric($db))->calculate($usuario_id);
-$metrics = array_merge($metrics, $incomeExpense);
-$recentTransactions = (new RecentTransactionsMetric($db))->calculate($usuario_id);
-$monthlyFlow = (new MonthlyFlowMetric($db))->calculate($usuario_id);
-$expenseByCategory = (new ExpenseByCategoryMetric($db))->calculate($usuario_id);
+// Nueva métrica: Presupuestos activos
+class ActiveBudgetsMetric extends MetricCalculator {
+    public function calculate($userId) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) 
+            FROM presupuestos 
+            WHERE usuario_id = ? 
+            AND (fecha_fin IS NULL OR fecha_fin >= CURDATE())
+        ");
+        $stmt->execute([$userId]);
+        return $stmt->fetchColumn() ?? 0;
+    }
+}
 
-// Función para formatear dinero
-function formatMoney($amount) {
-    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+// Obtener métricas
+try {
+    $metrics = [
+        'total_cuentas' => (new TotalAccountsMetric($db))->calculate($usuario_id),
+        'saldo_total' => (new TotalBalanceMetric($db))->calculate($usuario_id),
+        'presupuestos_activos' => (new ActiveBudgetsMetric($db))->calculate($usuario_id),
+    ];
+    
+    $incomeExpense = (new IncomeExpenseMetric($db))->calculate($usuario_id);
+    $metrics = array_merge($metrics, $incomeExpense);
+    $recentTransactions = (new RecentTransactionsMetric($db))->calculate($usuario_id);
+    $monthlyFlow = (new MonthlyFlowMetric($db))->calculate($usuario_id);
+    $expenseByCategory = (new ExpenseByCategoryMetric($db))->calculate($usuario_id);
+    
+} catch (Exception $e) {
+    error_log("Error en dashboard: " . $e->getMessage());
+    // Valores por defecto en caso de error
+    $metrics = [
+        'total_cuentas' => 0,
+        'saldo_total' => 0,
+        'presupuestos_activos' => 0,
+        'ingresos' => 0,
+        'gastos' => 0
+    ];
+    $recentTransactions = [];
+    $monthlyFlow = ['labels' => [], 'ingresos' => [], 'gastos' => []];
+    $expenseByCategory = ['labels' => [], 'data' => [], 'colors' => []];
+}
+
+// Función para formatear dinero mejorada
+function formatMoney($amount, $moneda = 'PYG') {
+    $symbols = [
+        'PYG' => 'Gs ',
+        'USD' => '$ ',
+        'EUR' => '€ '
+    ];
+    $symbol = $symbols[$moneda] ?? 'Gs ';
+    return $symbol . number_format($amount / 100, 0, ',', '.');
+}
+
+// Función para exportar datos a CSV
+function exportToCSV($data, $filename) {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    
+    // Escribir encabezados
+    if (!empty($data)) {
+        fputcsv($output, array_keys($data[0]));
+        
+        // Escribir datos
+        foreach ($data as $row) {
+            fputcsv($output, $row);
+        }
+    }
+    
+    fclose($output);
+    exit();
+}
+
+// Manejar exportación de transacciones
+if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
+    $stmt = $db->prepare("
+        SELECT 
+            t.fecha,
+            t.descripcion,
+            cat.nombre as categoria,
+            cat.tipo,
+            c.nombre as cuenta,
+            t.monto,
+            c.moneda
+        FROM transacciones t
+        INNER JOIN cuentas c ON t.cuenta_id = c.id
+        INNER JOIN categorias cat ON t.categoria_id = cat.id
+        WHERE c.usuario_id = ?
+        ORDER BY t.fecha DESC
+    ");
+    $stmt->execute([$usuario_id]);
+    $exportData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Formatear datos para exportación
+    foreach ($exportData as &$row) {
+        $row['monto'] = formatMoney($row['monto'], $row['moneda']);
+        unset($row['moneda']);
+    }
+    
+    exportToCSV($exportData, 'transacciones_' . date('Y-m-d'));
 }
 ?>
 <!DOCTYPE html>
@@ -154,6 +273,7 @@ function formatMoney($amount) {
             --bs-success: #198754;
             --bs-danger: #dc3545;
             --bs-warning: #ffc107;
+            --bs-info: #0dcaf0;
         }
         body {
             font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -183,6 +303,9 @@ function formatMoney($amount) {
         .metric-card.warning {
             border-left-color: var(--bs-warning);
         }
+        .metric-card.info {
+            border-left-color: var(--bs-info);
+        }
         .chart-container {
             position: relative;
             height: 300px;
@@ -201,6 +324,9 @@ function formatMoney($amount) {
         }
         .transaction-item:hover {
             background-color: rgba(0,0,0,0.025);
+        }
+        .export-btn {
+            font-size: 0.875rem;
         }
         @media (max-width: 768px) {
             .chart-container {
@@ -249,7 +375,10 @@ function formatMoney($amount) {
                     </li>
                 </ul>
                 <div class="d-flex">
-                    <a href="../auth/logout.php" class="btn btn-outline-danger">
+                    <a href="?export=transacciones" class="btn btn-outline-success btn-sm me-2 export-btn">
+                        <i class="bi bi-download me-1"></i> Exportar CSV
+                    </a>
+                    <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-box-arrow-right me-1"></i> Cerrar Sesión
                     </a>
                 </div>
@@ -272,7 +401,7 @@ function formatMoney($amount) {
                             </div>
                             <div>
                                 <h6 class="text-muted mb-1">Cuentas activas</h6>
-                                <h3 class="mb-0"><?= $metrics['total_cuentas'] ?></h3>
+                                <h3 class="mb-0"><?= htmlspecialchars($metrics['total_cuentas']) ?></h3>
                             </div>
                         </div>
                     </div>
@@ -294,30 +423,32 @@ function formatMoney($amount) {
                 </div>
             </div>
             <div class="col-md-6 col-lg-3">
-                <div class="card metric-card success">
+                <div class="card metric-card info">
                     <div class="card-body">
                         <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon bg-success bg-opacity-10 text-success">
-                                <i class="bi bi-graph-up"></i>
+                            <div class="transaction-icon bg-info bg-opacity-10 text-info">
+                                <i class="bi bi-pie-chart"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Ingresos (mes)</h6>
-                                <h3 class="mb-0"><?= formatMoney($metrics['ingresos']) ?></h3>
+                                <h6 class="text-muted mb-1">Presupuestos activos</h6>
+                                <h3 class="mb-0"><?= htmlspecialchars($metrics['presupuestos_activos']) ?></h3>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
             <div class="col-md-6 col-lg-3">
-                <div class="card metric-card danger">
+                <div class="card metric-card <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'success' : 'danger' ?>">
                     <div class="card-body">
                         <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon bg-danger bg-opacity-10 text-danger">
-                                <i class="bi bi-graph-down"></i>
+                            <div class="transaction-icon <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger' ?>">
+                                <i class="bi bi-graph-up"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Gastos (mes)</h6>
-                                <h3 class="mb-0"><?= formatMoney($metrics['gastos']) ?></h3>
+                                <h6 class="text-muted mb-1">Balance mensual</h6>
+                                <h3 class="mb-0 <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'text-success' : 'text-danger' ?>">
+                                    <?= formatMoney($metrics['ingresos'] - $metrics['gastos']) ?>
+                                </h3>
                             </div>
                         </div>
                     </div>
@@ -354,9 +485,14 @@ function formatMoney($amount) {
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <h5 class="mb-0">Transacciones recientes</h5>
-                    <a href="transacciones.php" class="btn btn-sm btn-outline-primary">
-                        Ver todas <i class="bi bi-chevron-right ms-1"></i>
-                    </a>
+                    <div>
+                        <a href="?export=transacciones" class="btn btn-sm btn-outline-success me-2">
+                            <i class="bi bi-download me-1"></i> Exportar CSV
+                        </a>
+                        <a href="transacciones.php" class="btn btn-sm btn-outline-primary">
+                            Ver todas <i class="bi bi-chevron-right ms-1"></i>
+                        </a>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover">
@@ -370,24 +506,33 @@ function formatMoney($amount) {
                             </tr>
                         </thead>
                         <tbody>
-                            <?php foreach ($recentTransactions as $t): ?>
-                            <tr class="transaction-item">
-                                <td><?= date('d M', strtotime($t['fecha'])) ?></td>
-                                <td><?= htmlspecialchars($t['descripcion']) ?></td>
-                                <td>
-                                    <span class="badge" style="background-color: <?= $t['color'] ?? '#0d6efd' ?>;">
-                                        <?= htmlspecialchars($t['categoria']) ?>
-                                    </span>
-                                </td>
-                                <td><?= htmlspecialchars($t['cuenta']) ?></td>
-                                <td class="text-end">
-                                    <span class="fw-bold <?= $t['tipo'] === 'ingreso' ? 'text-success' : 'text-danger' ?>">
-                                        <?= $t['tipo'] === 'ingreso' ? '+' : '-' ?>
-                                        <?= formatMoney(abs($t['monto'])) ?>
-                                    </span>
-                                </td>
-                            </tr>
-                            <?php endforeach; ?>
+                            <?php if (empty($recentTransactions)): ?>
+                                <tr>
+                                    <td colspan="5" class="text-center text-muted py-4">
+                                        <i class="bi bi-inbox display-4 d-block mb-2"></i>
+                                        No hay transacciones recientes
+                                    </td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($recentTransactions as $t): ?>
+                                <tr class="transaction-item">
+                                    <td><?= htmlspecialchars(date('d M', strtotime($t['fecha']))) ?></td>
+                                    <td><?= htmlspecialchars($t['descripcion'] ?? 'Sin descripción') ?></td>
+                                    <td>
+                                        <span class="badge" style="background-color: <?= htmlspecialchars($t['color']) ?>;">
+                                            <?= htmlspecialchars($t['categoria']) ?>
+                                        </span>
+                                    </td>
+                                    <td><?= htmlspecialchars($t['cuenta']) ?></td>
+                                    <td class="text-end">
+                                        <span class="fw-bold <?= $t['tipo'] === 'ingreso' ? 'text-success' : 'text-danger' ?>">
+                                            <?= $t['tipo'] === 'ingreso' ? '+' : '-' ?>
+                                            <?= formatMoney(abs($t['monto']), $t['moneda']) ?>
+                                        </span>
+                                    </td>
+                                </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
                         </tbody>
                     </table>
                 </div>
