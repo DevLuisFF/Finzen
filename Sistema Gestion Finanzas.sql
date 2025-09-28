@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 28, 2025 at 03:54 PM
+-- Generation Time: Sep 28, 2025 at 03:57 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -180,12 +180,6 @@ DELIMITER $$
 CREATE TRIGGER `trg_transaccion_delete` AFTER DELETE ON `transacciones` FOR EACH ROW UPDATE cuentas
 SET saldo = saldo - OLD.monto
 WHERE id = OLD.cuenta_id
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_transaccion_insert` AFTER INSERT ON `transacciones` FOR EACH ROW UPDATE cuentas
-SET saldo = saldo + NEW.monto
-WHERE id = NEW.cuenta_id
 $$
 DELIMITER ;
 
