@@ -306,7 +306,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link active" href="presupuestos.php">
+                        <a class="nav-link" href="presupuestos.php">
                             <i class="bi bi-pie-chart me-1"></i> Presupuestos
                         </a>
                     </li>

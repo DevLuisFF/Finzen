@@ -133,7 +133,7 @@ $expenseByCategory = (new ExpenseByCategoryMetric($db))->calculate($usuario_id);
 
 // Función para formatear dinero
 function formatMoney($amount) {
-    return '$' . number_format($amount / 100, 0, ',', '.');
+    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
 }
 ?>
 <!DOCTYPE html>
@@ -238,7 +238,7 @@ function formatMoney($amount) {
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link active" href="presupuestos.php">
+                        <a class="nav-link" href="presupuestos.php">
                             <i class="bi bi-pie-chart me-1"></i> Presupuestos
                         </a>
                     </li>
@@ -479,7 +479,7 @@ function formatMoney($amount) {
 
         // Helper function to format currency
         function formatCurrency(value) {
-            return '$' + value.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+            return 'Gs ' + value.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g, ".");
         }
     </script>
 </body>

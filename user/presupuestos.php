@@ -310,6 +310,11 @@ $totalPages = ceil($totalPresupuestos / $perPage);
                             <i class="bi bi-pie-chart me-1"></i> Presupuestos
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="transacciones.php">
+                            <i class="bi bi-arrow-left-right me-1"></i> Transacciones
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex">
                     <a href="../auth/logout.php" class="btn btn-outline-danger">
