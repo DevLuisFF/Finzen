@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 28, 2025 at 04:02 PM
+-- Generation Time: Sep 28, 2025 at 04:09 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -54,6 +54,21 @@ CREATE TRIGGER `trg_actualizar_timestamp_categorias` BEFORE UPDATE ON `categoria
 END
 $$
 DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_prevenir_eliminar_categoria_con_transacciones` BEFORE DELETE ON `categorias` FOR EACH ROW BEGIN
+    DECLARE transacciones_count INT;
+    
+    SELECT COUNT(*) INTO transacciones_count 
+    FROM transacciones 
+    WHERE categoria_id = OLD.id;
+    
+    IF transacciones_count > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se puede eliminar una categoría con transacciones asociadas';
+    END IF;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -99,6 +114,37 @@ CREATE TRIGGER `trg_desactivar_cuenta_saldo_negativo` AFTER UPDATE ON `cuentas` 
 END
 $$
 DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_nombre_cuenta_default` BEFORE INSERT ON `cuentas` FOR EACH ROW BEGIN
+    IF NEW.nombre IS NULL OR NEW.nombre = '' THEN
+        SET NEW.nombre = CONCAT('Cuenta ', DATE_FORMAT(NOW(), '%Y%m%d'));
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_prevenir_eliminar_cuenta_con_transacciones` BEFORE DELETE ON `cuentas` FOR EACH ROW BEGIN
+    DECLARE transacciones_count INT;
+    
+    SELECT COUNT(*) INTO transacciones_count 
+    FROM transacciones 
+    WHERE cuenta_id = OLD.id;
+    
+    IF transacciones_count > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se puede eliminar una cuenta con transacciones asociadas';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_reactivar_cuenta_saldo_positivo` BEFORE UPDATE ON `cuentas` FOR EACH ROW BEGIN
+    IF NEW.saldo >= 0 AND OLD.saldo < 0 AND NEW.activa = FALSE THEN
+        SET NEW.activa = TRUE;
+    END IF;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -125,6 +171,24 @@ CREATE TABLE `presupuestos` (
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_presupuestos` BEFORE UPDATE ON `presupuestos` FOR EACH ROW BEGIN
     SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_fechas_presupuesto` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    IF NEW.fecha_fin IS NOT NULL AND NEW.fecha_inicio > NEW.fecha_fin THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'La fecha de inicio no puede ser mayor a la fecha fin';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_presupuesto_positivo` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    IF NEW.monto <= 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El presupuesto debe ser mayor a 0';
+    END IF;
 END
 $$
 DELIMITER ;
@@ -203,9 +267,26 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_limitar_descripcion` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    IF LENGTH(NEW.descripcion) > 255 THEN
+        SET NEW.descripcion = CONCAT(SUBSTRING(NEW.descripcion, 1, 252), '...');
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_transaccion_delete` AFTER DELETE ON `transacciones` FOR EACH ROW UPDATE cuentas
 SET saldo = saldo - OLD.monto
 WHERE id = OLD.cuenta_id
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_monto_positivo` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    IF NEW.monto <= 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El monto debe ser mayor a 0';
+    END IF;
+END
 $$
 DELIMITER ;
 
@@ -240,6 +321,15 @@ INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_cont
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_usuarios` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
     SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_email` BEFORE INSERT ON `usuarios` FOR EACH ROW BEGIN
+    IF NEW.correo_electronico NOT LIKE '%_@__%.__%' THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Formato de email inválido';
+    END IF;
 END
 $$
 DELIMITER ;
