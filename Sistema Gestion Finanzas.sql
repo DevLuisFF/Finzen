@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 15, 2025 at 03:25 AM
+-- Generation Time: Sep 28, 2025 at 03:54 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -101,7 +101,7 @@ CREATE TABLE `presupuestos` (
   `notificacion` tinyint(1) DEFAULT 1,
   `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
-) ;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 -- --------------------------------------------------------
 
@@ -140,7 +140,7 @@ CREATE TABLE `transacciones` (
   `recurrente` tinyint(1) DEFAULT 0,
   `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
-) ;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
 -- Dumping data for table `transacciones`
@@ -152,35 +152,6 @@ INSERT INTO `transacciones` (`id`, `cuenta_id`, `categoria_id`, `monto`, `descri
 --
 -- Triggers `transacciones`
 --
-DELIMITER $$
-CREATE TRIGGER `trg_actualizar_proxima_fecha_recurrente` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
-    DECLARE recurrente_id INT;
-    
-    -- Si es una transacción recurrente, actualizar próxima fecha
-    IF NEW.recurrente = TRUE THEN
-        SELECT id INTO recurrente_id 
-        FROM transacciones_recurrentes 
-        WHERE cuenta_id = NEW.cuenta_id 
-          AND categoria_id = NEW.categoria_id 
-          AND monto = NEW.monto 
-          AND descripcion = NEW.descripcion
-        LIMIT 1;
-        
-        IF recurrente_id IS NOT NULL THEN
-            UPDATE transacciones_recurrentes 
-            SET proxima_fecha = CASE frecuencia
-                WHEN 'diaria' THEN DATE_ADD(NEW.fecha, INTERVAL 1 DAY)
-                WHEN 'semanal' THEN DATE_ADD(NEW.fecha, INTERVAL 1 WEEK)
-                WHEN 'mensual' THEN DATE_ADD(NEW.fecha, INTERVAL 1 MONTH)
-                WHEN 'anual' THEN DATE_ADD(NEW.fecha, INTERVAL 1 YEAR)
-            END,
-            actualizado_en = CURRENT_TIMESTAMP
-            WHERE id = recurrente_id;
-        END IF;
-    END IF;
-END
-$$
-DELIMITER ;
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_saldo_insert` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
     DECLARE tipo_categoria ENUM('ingreso','gasto');
@@ -221,35 +192,6 @@ DELIMITER ;
 -- --------------------------------------------------------
 
 --
--- Table structure for table `transacciones_recurrentes`
---
-
-CREATE TABLE `transacciones_recurrentes` (
-  `id` int(10) UNSIGNED NOT NULL,
-  `usuario_id` int(10) UNSIGNED NOT NULL,
-  `cuenta_id` int(10) UNSIGNED NOT NULL,
-  `categoria_id` int(10) UNSIGNED NOT NULL,
-  `monto` bigint(20) NOT NULL COMMENT 'Valor en centavos/unidad mínima',
-  `descripcion` varchar(255) DEFAULT NULL,
-  `frecuencia` enum('diaria','semanal','mensual','anual') NOT NULL,
-  `dia` tinyint(3) UNSIGNED DEFAULT NULL COMMENT 'Día del mes para mensual/anual o día de semana para semanal',
-  `proxima_fecha` date NOT NULL,
-  `finaliza_en` date DEFAULT NULL,
-  `activa` tinyint(1) DEFAULT 1,
-  `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
-  `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci COMMENT='Transacciones recurrentes programadas';
-
---
--- Dumping data for table `transacciones_recurrentes`
---
-
-INSERT INTO `transacciones_recurrentes` (`id`, `usuario_id`, `cuenta_id`, `categoria_id`, `monto`, `descripcion`, `frecuencia`, `dia`, `proxima_fecha`, `finaliza_en`, `activa`, `creado_en`, `actualizado_en`) VALUES
-(1, 1, 1, 2, 1100, 'dos pruebas', 'semanal', 1, '2025-09-15', '2025-09-21', 1, '2025-09-15 01:21:27', '2025-09-15 01:21:27');
-
--- --------------------------------------------------------
-
---
 -- Table structure for table `usuarios`
 --
 
@@ -262,7 +204,7 @@ CREATE TABLE `usuarios` (
   `activo` tinyint(1) DEFAULT 1,
   `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
-) ;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
 -- Dumping data for table `usuarios`
@@ -271,31 +213,6 @@ CREATE TABLE `usuarios` (
 INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `activo`, `creado_en`, `actualizado_en`) VALUES
 (1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 1, '2025-09-15 01:18:33', '2025-09-15 02:09:11'),
 (2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 2, 1, '2025-09-15 02:07:33', NULL);
-
---
--- Triggers `usuarios`
---
-DELIMITER $$
-CREATE TRIGGER `trg_usuarios_update` BEFORE UPDATE ON `usuarios` FOR EACH ROW INSERT INTO usuarios_historial(usuario_id, nombre_usuario, correo_electronico, rol_id, activo)
-VALUES (OLD.id, OLD.nombre_usuario, OLD.correo_electronico, OLD.rol_id, OLD.activo)
-$$
-DELIMITER ;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `usuarios_historial`
---
-
-CREATE TABLE `usuarios_historial` (
-  `id` bigint(20) UNSIGNED NOT NULL,
-  `usuario_id` int(10) UNSIGNED DEFAULT NULL,
-  `nombre_usuario` varchar(100) DEFAULT NULL,
-  `correo_electronico` varchar(150) DEFAULT NULL,
-  `rol_id` tinyint(3) UNSIGNED DEFAULT NULL,
-  `activo` tinyint(1) DEFAULT NULL,
-  `cambiado_en` timestamp NOT NULL DEFAULT current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
 -- Indexes for dumped tables
@@ -342,16 +259,6 @@ ALTER TABLE `transacciones`
   ADD KEY `idx_transacciones_cuenta_fecha` (`cuenta_id`,`fecha`);
 
 --
--- Indexes for table `transacciones_recurrentes`
---
-ALTER TABLE `transacciones_recurrentes`
-  ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_recurrentes_usuario` (`usuario_id`),
-  ADD KEY `idx_recurrentes_proxima_fecha` (`proxima_fecha`),
-  ADD KEY `fk_recurrente_cuenta` (`cuenta_id`),
-  ADD KEY `fk_recurrente_categoria` (`categoria_id`);
-
---
 -- Indexes for table `usuarios`
 --
 ALTER TABLE `usuarios`
@@ -359,12 +266,6 @@ ALTER TABLE `usuarios`
   ADD UNIQUE KEY `nombre_usuario` (`nombre_usuario`),
   ADD UNIQUE KEY `correo_electronico` (`correo_electronico`),
   ADD KEY `idx_usuario_rol` (`rol_id`);
-
---
--- Indexes for table `usuarios_historial`
---
-ALTER TABLE `usuarios_historial`
-  ADD PRIMARY KEY (`id`);
 
 --
 -- AUTO_INCREMENT for dumped tables
@@ -398,25 +299,13 @@ ALTER TABLE `roles`
 -- AUTO_INCREMENT for table `transacciones`
 --
 ALTER TABLE `transacciones`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `transacciones_recurrentes`
---
-ALTER TABLE `transacciones_recurrentes`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
 
 --
 -- AUTO_INCREMENT for table `usuarios`
 --
 ALTER TABLE `usuarios`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
-
---
--- AUTO_INCREMENT for table `usuarios_historial`
---
-ALTER TABLE `usuarios_historial`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
 -- Constraints for dumped tables
@@ -447,14 +336,6 @@ ALTER TABLE `presupuestos`
 ALTER TABLE `transacciones`
   ADD CONSTRAINT `fk_transaccion_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON UPDATE CASCADE,
   ADD CONSTRAINT `fk_transaccion_cuenta` FOREIGN KEY (`cuenta_id`) REFERENCES `cuentas` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
---
--- Constraints for table `transacciones_recurrentes`
---
-ALTER TABLE `transacciones_recurrentes`
-  ADD CONSTRAINT `fk_recurrente_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_recurrente_cuenta` FOREIGN KEY (`cuenta_id`) REFERENCES `cuentas` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_recurrente_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
 -- Constraints for table `usuarios`
