@@ -8,31 +8,37 @@ require "../config/database.php";
 $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION["user_id"];
 
-// Tipos de categorías
+// Tipos de categorías según esquema de BD
 $tipos = [
     "ingreso" => "Ingreso",
-    "gasto" => "Gasto",
-    "transferencia" => "Transferencia",
+    "gasto" => "Gasto"
 ];
 
-// Iconos disponibles
+// Iconos disponibles usando Bootstrap Icons (coherente con el esquema)
 $iconos = [
-    "fa-shopping-cart" => ["nombre" => "Compras", "clase" => "text-primary"],
-    "fa-utensils" => ["nombre" => "Comida", "clase" => "text-success"],
-    "fa-car" => ["nombre" => "Transporte", "clase" => "text-info"],
-    "fa-home" => ["nombre" => "Hogar", "clase" => "text-warning"],
-    "fa-tv" => ["nombre" => "Entretenimiento", "clase" => "text-danger"],
-    "fa-heartbeat" => ["nombre" => "Salud", "clase" => "text-pink"],
-    "fa-graduation-cap" => ["nombre" => "Educación", "clase" => "text-purple"],
-    "fa-money-bill-wave" => ["nombre" => "Ingresos", "clase" => "text-success"],
-    "fa-piggy-bank" => ["nombre" => "Ahorros", "clase" => "text-indigo"],
-    "fa-gift" => ["nombre" => "Regalos", "clase" => "text-orange"],
+    "bi-cart" => ["nombre" => "Compras", "clase" => "text-primary"],
+    "bi-cup-straw" => ["nombre" => "Comida", "clase" => "text-success"],
+    "bi-car-front" => ["nombre" => "Transporte", "clase" => "text-info"],
+    "bi-house" => ["nombre" => "Hogar", "clase" => "text-warning"],
+    "bi-tv" => ["nombre" => "Entretenimiento", "clase" => "text-danger"],
+    "bi-heart-pulse" => ["nombre" => "Salud", "clase" => "text-pink"],
+    "bi-book" => ["nombre" => "Educación", "clase" => "text-purple"],
+    "bi-cash-coin" => ["nombre" => "Ingresos", "clase" => "text-success"],
+    "bi-piggy-bank" => ["nombre" => "Ahorros", "clase" => "text-indigo"],
+    "bi-gift" => ["nombre" => "Regalos", "clase" => "text-orange"],
+    "bi-phone" => ["nombre" => "Telefonía", "clase" => "text-blue"],
+    "bi-wifi" => ["nombre" => "Internet", "clase" => "text-cyan"],
+    "bi-lightning" => ["nombre" => "Energía", "clase" => "text-yellow"],
+    "bi-droplet" => ["nombre" => "Agua", "clase" => "text-blue"],
+    "bi-bag" => ["nombre" => "Ropa", "clase" => "text-pink"],
+    "bi-controller" => ["nombre" => "Juegos", "clase" => "text-purple"]
 ];
 
-// Colores disponibles
+// Colores disponibles (coherente con valores por defecto del esquema)
 $colores = [
+    "#1976D2" => "Azul Principal",
     "#FF6384" => "Rojo",
-    "#36A2EB" => "Azul",
+    "#36A2EB" => "Azul Claro",
     "#FFCE56" => "Amarillo",
     "#4BC0C0" => "Turquesa",
     "#9966FF" => "Morado",
@@ -41,6 +47,9 @@ $colores = [
     "#F06292" => "Rosa",
     "#7986CB" => "Índigo",
     "#A1887F" => "Marrón",
+    "#4CAF50" => "Verde Success",
+    "#F44336" => "Rojo Danger",
+    "#FF9800" => "Naranja Warning"
 ];
 
 // Clase para manejar categorías
@@ -53,9 +62,11 @@ class CategoryRepository {
 
     public function getAll($userId, $filters = [], $limit = 10, $offset = 0) {
         $query = "
-            SELECT c.*, u.nombre_usuario
+            SELECT c.*, u.nombre_usuario,
+                   COUNT(t.id) as total_transacciones
             FROM categorias c
             JOIN usuarios u ON c.usuario_id = u.id
+            LEFT JOIN transacciones t ON c.id = t.categoria_id
             WHERE c.usuario_id = :usuario_id
         ";
         $params = [':usuario_id' => $userId];
@@ -65,6 +76,8 @@ class CategoryRepository {
             $query .= " AND c.tipo = :tipo";
             $params[':tipo'] = $filters['tipo'];
         }
+
+        $query .= " GROUP BY c.id";
 
         // Contar total para paginación
         $countStmt = $this->db->prepare("SELECT COUNT(*) FROM ($query) AS filtered");
@@ -86,6 +99,24 @@ class CategoryRepository {
             'data' => $stmt->fetchAll(),
             'total' => $total
         ];
+    }
+
+    public function getStatsByType($userId) {
+        $stmt = $this->db->prepare("
+            SELECT 
+                tipo,
+                COUNT(*) as total_categorias
+            FROM categorias 
+            WHERE usuario_id = :usuario_id 
+            GROUP BY tipo
+        ");
+        $stmt->execute([':usuario_id' => $userId]);
+        
+        $stats = ['ingreso' => 0, 'gasto' => 0];
+        while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+            $stats[$row['tipo']] = (int)$row['total_categorias'];
+        }
+        return $stats;
     }
 
     public function create($data) {
@@ -111,6 +142,17 @@ class CategoryRepository {
     }
 
     public function delete($id, $userId) {
+        // Verificar si la categoría tiene transacciones antes de eliminar
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) FROM transacciones WHERE categoria_id = :id
+        ");
+        $stmt->execute([':id' => $id]);
+        $hasTransactions = $stmt->fetchColumn() > 0;
+
+        if ($hasTransactions) {
+            return false; // No se puede eliminar categoría con transacciones
+        }
+
         $stmt = $this->db->prepare("DELETE FROM categorias WHERE id = :id AND usuario_id = :usuario_id");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
@@ -118,23 +160,32 @@ class CategoryRepository {
 
 // Procesar operaciones CRUD
 $categoryRepo = new CategoryRepository($db);
+$error = '';
+$success = '';
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $data = [
         'usuario_id' => $usuario_id,
         'nombre' => trim($_POST["nombre"] ?? ""),
         'tipo' => $_POST["tipo"] ?? "gasto",
-        'icono' => $_POST["icono"] ?? "fa-shopping-cart",
-        'color' => $_POST["color"] ?? "#FF6384"
+        'icono' => $_POST["icono"] ?? "bi-cart",
+        'color' => $_POST["color"] ?? "#1976D2"
     ];
 
-    if (isset($_POST["create"]) && $data['nombre']) {
-        $categoryRepo->create($data);
+    try {
+        if (isset($_POST["create"]) && $data['nombre']) {
+            $categoryRepo->create($data);
+            $_SESSION['success'] = 'Categoría creada exitosamente';
+        }
+        if (isset($_POST["update"]) && isset($_POST["id"])) {
+            $data['id'] = intval($_POST["id"]);
+            $categoryRepo->update($data['id'], $data);
+            $_SESSION['success'] = 'Categoría actualizada exitosamente';
+        }
+    } catch (Exception $e) {
+        $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
-    if (isset($_POST["update"]) && isset($_POST["id"])) {
-        $data['id'] = intval($_POST["id"]);
-        $categoryRepo->update($data['id'], $data);
-    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
@@ -142,9 +193,26 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 // Eliminar categoría
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
-    $categoryRepo->delete($id, $usuario_id);
+    $successDelete = $categoryRepo->delete($id, $usuario_id);
+    
+    if ($successDelete) {
+        $_SESSION['success'] = 'Categoría eliminada exitosamente';
+    } else {
+        $_SESSION['error'] = 'No se puede eliminar una categoría que tiene transacciones asociadas';
+    }
+    
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
+}
+
+// Mostrar mensajes de éxito/error
+if (isset($_SESSION['success'])) {
+    $success = $_SESSION['success'];
+    unset($_SESSION['success']);
+}
+if (isset($_SESSION['error'])) {
+    $error = $_SESSION['error'];
+    unset($_SESSION['error']);
 }
 
 // Obtener filtros de la URL
@@ -162,6 +230,9 @@ $result = $categoryRepo->getAll($usuario_id, $filters, $perPage, $offset);
 $categorias = $result['data'];
 $totalCategorias = $result['total'];
 $totalPages = ceil($totalCategorias / $perPage);
+
+// Obtener estadísticas por tipo
+$stats = $categoryRepo->getStatsByType($usuario_id);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -173,8 +244,6 @@ $totalPages = ceil($totalCategorias / $perPage);
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css">
-    <!-- Font Awesome -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         :root {
             --bs-primary: #0d6efd;
@@ -186,6 +255,9 @@ $totalPages = ceil($totalCategorias / $perPage);
             --bs-purple: #6f42c1;
             --bs-indigo: #6610f2;
             --bs-orange: #fd7e14;
+            --bs-blue: #0d6efd;
+            --bs-cyan: #0dcaf0;
+            --bs-yellow: #ffc107;
         }
         body {
             font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
@@ -207,19 +279,9 @@ $totalPages = ceil($totalCategorias / $perPage);
             font-size: 0.85em;
             padding: 0.35em 0.65em;
         }
-        .table-responsive {
-            overflow-x: auto;
-        }
         .pagination .page-item.active .page-link {
             background-color: var(--bs-primary);
             border-color: var(--bs-primary);
-        }
-        .form-select-custom {
-            appearance: none;
-            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%23343a40' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M2 5l6 6 6-6'/%3e%3c/svg%3e");
-            background-repeat: no-repeat;
-            background-position: right 0.75rem center;
-            background-size: 16px 12px;
         }
         .color-circle {
             width: 24px;
@@ -252,27 +314,34 @@ $totalPages = ceil($totalCategorias / $perPage);
             width: 100%;
         }
         .icon-preview {
-            font-size: 1.2rem;
+            font-size: 1.5rem;
             margin-right: 8px;
         }
-        .text-pink { color: #d63384 !important; }
-        .text-purple { color: #6f42c1 !important; }
-        .text-indigo { color: #6610f2 !important; }
-        .text-orange { color: #fd7e14 !important; }
+        .stats-card {
+            border-left: 4px solid;
+        }
+        .stats-card.ingreso {
+            border-left-color: var(--bs-success);
+        }
+        .stats-card.gasto {
+            border-left-color: var(--bs-danger);
+        }
+        .text-pink { color: var(--bs-pink) !important; }
+        .text-purple { color: var(--bs-purple) !important; }
+        .text-indigo { color: var(--bs-indigo) !important; }
+        .text-orange { color: var(--bs-orange) !important; }
+        .text-blue { color: var(--bs-blue) !important; }
+        .text-cyan { color: var(--bs-cyan) !important; }
+        .text-yellow { color: var(--bs-yellow) !important; }
+        .category-badge {
+            font-size: 0.75rem;
+        }
         @media (max-width: 768px) {
             .navbar-nav {
                 flex-direction: row;
             }
             .nav-item {
                 margin-right: 0.5rem;
-            }
-            .category-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-        }
-        @media (max-width: 576px) {
-            .category-grid {
-                grid-template-columns: 1fr;
             }
         }
     </style>
@@ -337,13 +406,64 @@ $totalPages = ceil($totalCategorias / $perPage);
             </button>
         </div>
 
+        <!-- Alertas -->
+        <?php if (!empty($success)): ?>
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                <i class="bi bi-check-circle me-2"></i>
+                <?= htmlspecialchars($success) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?= htmlspecialchars($error) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
+        <!-- Estadísticas -->
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card stats-card ingreso">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Categorías de Ingreso</h6>
+                                <h3 class="text-success mb-0"><?= $stats['ingreso'] ?></h3>
+                            </div>
+                            <div class="icon-preview text-success">
+                                <i class="bi bi-arrow-down-circle"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card stats-card gasto">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <h6 class="card-title text-muted mb-1">Categorías de Gasto</h6>
+                                <h3 class="text-danger mb-0"><?= $stats['gasto'] ?></h3>
+                            </div>
+                            <div class="icon-preview text-danger">
+                                <i class="bi bi-arrow-up-circle"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Filtros -->
         <div class="card mb-4">
             <div class="card-body">
                 <form method="GET" action="" class="row g-3 align-items-end">
                     <div class="col-md-4">
                         <label for="tipo" class="form-label">Tipo de Categoría</label>
-                        <select class="form-select form-select-custom" id="tipo" name="tipo">
+                        <select class="form-select" id="tipo" name="tipo">
                             <option value="">Todos los tipos</option>
                             <?php foreach ($tipos as $codigo => $nombre): ?>
                                 <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
@@ -352,12 +472,12 @@ $totalPages = ceil($totalCategorias / $perPage);
                             <?php endforeach; ?>
                         </select>
                     </div>
-                    <div class="col-md-3">
+                    <div class="col-md-4">
                         <button type="submit" class="btn btn-primary w-100">
                             <i class="bi bi-funnel me-1"></i> Filtrar
                         </button>
                     </div>
-                    <div class="col-md-5 text-md-end">
+                    <div class="col-md-4 text-md-end">
                         <span class="badge bg-primary badge-custom">
                             <?= $totalCategorias ?> categoría<?= $totalCategorias !== 1 ? 's' : '' ?>
                         </span>
@@ -379,18 +499,15 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </button>
                     </div>
                 <?php else: ?>
-                    <div class="category-grid row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
+                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
                         <?php foreach ($categorias as $categoria): ?>
                         <div class="col">
                             <div class="card h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
                                         <div>
-                                            <span class="badge
-                                                <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' :
-                                                   ($categoria["tipo"] === 'gasto' ? 'bg-danger' : 'bg-primary') ?>
-                                                badge-custom">
-                                                <?= htmlspecialchars($tipos[$categoria["tipo"]] ?? $categoria["tipo"]) ?>
+                                            <span class="badge <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> category-badge">
+                                                <?= htmlspecialchars($tipos[$categoria["tipo"]]) ?>
                                             </span>
                                         </div>
                                         <div class="dropdown">
@@ -413,7 +530,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                                                 <li>
                                                     <a class="dropdown-item text-danger"
                                                        href="?delete=<?= $categoria["id"] ?>&page=<?= $page ?>&tipo=<?= $filters['tipo'] ?>"
-                                                       onclick="return confirm('¿Estás seguro de eliminar esta categoría?')">
+                                                       onclick="return confirm('¿Estás seguro de eliminar esta categoría?\n\n<?= $categoria['total_transacciones'] > 0 ? 'ADVERTENCIA: Esta categoría tiene ' . $categoria['total_transacciones'] . ' transacción(es) asociada(s) y no se puede eliminar.' : 'Esta acción no se puede deshacer.' ?>')">
                                                         <i class="bi bi-trash me-2"></i> Eliminar
                                                     </a>
                                                 </li>
@@ -421,14 +538,27 @@ $totalPages = ceil($totalCategorias / $perPage);
                                         </div>
                                     </div>
                                     <div class="text-center mb-3">
-                                        <div class="icon-preview mb-2">
-                                            <i class="fas <?= htmlspecialchars($categoria["icono"]) ?> <?= $iconos[$categoria["icono"]]['clase'] ?> fa-2x"></i>
+                                        <div class="icon-preview mb-2" style="color: <?= htmlspecialchars($categoria["color"]) ?>">
+                                            <i class="bi <?= htmlspecialchars($categoria["icono"]) ?>"></i>
                                         </div>
                                         <h5 class="card-title mb-2"><?= htmlspecialchars($categoria["nombre"]) ?></h5>
                                         <div class="color-selector justify-content-center">
                                             <span class="color-circle" style="background-color: <?= htmlspecialchars($categoria["color"]) ?>"></span>
-                                            <span><?= htmlspecialchars($colores[$categoria["color"]] ?? $categoria["color"]) ?></span>
+                                            <small class="text-muted"><?= htmlspecialchars($colores[$categoria["color"]] ?? $categoria["color"]) ?></small>
                                         </div>
+                                    </div>
+                                    <div class="text-center">
+                                        <small class="text-muted">
+                                            <i class="bi bi-clock me-1"></i>
+                                            Creada: <?= date('d/m/Y', strtotime($categoria["creado_en"])) ?>
+                                        </small>
+                                        <?php if ($categoria["total_transacciones"] > 0): ?>
+                                            <br>
+                                            <small class="text-info">
+                                                <i class="bi bi-list-check me-1"></i>
+                                                <?= $categoria["total_transacciones"] ?> transacción(es)
+                                            </small>
+                                        <?php endif; ?>
                                     </div>
                                 </div>
                             </div>
@@ -437,6 +567,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                     </div>
 
                     <!-- Paginación -->
+                    <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
@@ -464,6 +595,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                             <?php endif; ?>
                         </ul>
                     </nav>
+                    <?php endif; ?>
                 <?php endif; ?>
             </div>
         </div>
@@ -488,7 +620,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="tipo" class="form-label">Tipo</label>
-                            <select class="form-select form-select-custom" id="tipo" name="tipo" required>
+                            <select class="form-select" id="tipo" name="tipo" required>
                                 <option value="">Seleccionar Tipo</option>
                                 <?php foreach ($tipos as $codigo => $nombre): ?>
                                     <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
@@ -497,11 +629,11 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="icono" class="form-label">Icono</label>
-                            <select class="form-select form-select-custom" id="icono" name="icono" required>
+                            <select class="form-select" id="icono" name="icono" required>
                                 <option value="">Seleccionar Icono</option>
                                 <?php foreach ($iconos as $codigo => $icono): ?>
-                                    <option value="<?= $codigo ?>">
-                                        <i class="fas <?= $codigo ?> me-2"></i> <?= htmlspecialchars($icono['nombre']) ?>
+                                    <option value="<?= $codigo ?>" data-class="<?= $icono['clase'] ?>">
+                                        <i class="bi <?= $codigo ?> me-2"></i> <?= htmlspecialchars($icono['nombre']) ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -510,12 +642,12 @@ $totalPages = ceil($totalCategorias / $perPage);
                             <label class="form-label">Color</label>
                             <div class="row g-2">
                                 <?php foreach ($colores as $codigo => $nombre): ?>
-                                <div class="col-4">
+                                <div class="col-6 col-sm-4">
                                     <label class="color-option w-100">
                                         <input type="radio" name="color" value="<?= $codigo ?>" required class="d-none">
                                         <span class="color-selector">
                                             <span class="color-circle" style="background-color: <?= $codigo ?>"></span>
-                                            <span><?= htmlspecialchars($nombre) ?></span>
+                                            <small><?= htmlspecialchars($nombre) ?></small>
                                         </span>
                                     </label>
                                 </div>
@@ -554,7 +686,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="edit_tipo" class="form-label">Tipo</label>
-                            <select class="form-select form-select-custom" id="edit_tipo" name="tipo" required>
+                            <select class="form-select" id="edit_tipo" name="tipo" required>
                                 <option value="">Seleccionar Tipo</option>
                                 <?php foreach ($tipos as $codigo => $nombre): ?>
                                     <option value="<?= $codigo ?>"><?= htmlspecialchars($nombre) ?></option>
@@ -563,11 +695,11 @@ $totalPages = ceil($totalCategorias / $perPage);
                         </div>
                         <div class="mb-3">
                             <label for="edit_icono" class="form-label">Icono</label>
-                            <select class="form-select form-select-custom" id="edit_icono" name="icono" required>
+                            <select class="form-select" id="edit_icono" name="icono" required>
                                 <option value="">Seleccionar Icono</option>
                                 <?php foreach ($iconos as $codigo => $icono): ?>
                                     <option value="<?= $codigo ?>">
-                                        <?= htmlspecialchars($icono['nombre']) ?>
+                                        <i class="bi <?= $codigo ?> me-2"></i> <?= htmlspecialchars($icono['nombre']) ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
@@ -576,12 +708,12 @@ $totalPages = ceil($totalCategorias / $perPage);
                             <label class="form-label">Color</label>
                             <div class="row g-2" id="edit_colores_container">
                                 <?php foreach ($colores as $codigo => $nombre): ?>
-                                <div class="col-4">
+                                <div class="col-6 col-sm-4">
                                     <label class="color-option w-100">
                                         <input type="radio" name="color" value="<?= $codigo ?>" required class="d-none">
                                         <span class="color-selector">
                                             <span class="color-circle" style="background-color: <?= $codigo ?>"></span>
-                                            <span><?= htmlspecialchars($nombre) ?></span>
+                                            <small><?= htmlspecialchars($nombre) ?></small>
                                         </span>
                                     </label>
                                 </div>
@@ -598,6 +730,7 @@ $totalPages = ceil($totalCategorias / $perPage);
                 </form>
             </div>
         </div>
+    </div>
 
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -618,7 +751,6 @@ $totalPages = ceil($totalCategorias / $perPage);
                         const colorInput = document.querySelector(`#edit_colores_container input[value="${color}"]`);
                         if (colorInput) {
                             colorInput.checked = true;
-                            colorInput.closest('.color-option').classList.add('active');
                         }
                     }
                 });
@@ -630,8 +762,20 @@ $totalPages = ceil($totalCategorias / $perPage);
                     const radio = this.querySelector('input[type="radio"]');
                     if (radio) {
                         radio.checked = true;
+                        // Remover selección anterior
+                        document.querySelectorAll('.color-option').forEach(opt => {
+                            opt.classList.remove('active');
+                        });
+                        this.classList.add('active');
                     }
                 });
+            });
+
+            // Mostrar preview del icono seleccionado
+            document.getElementById('icono').addEventListener('change', function() {
+                const selectedOption = this.options[this.selectedIndex];
+                const iconClass = selectedOption.getAttribute('data-class');
+                // Podrías agregar aquí un preview del icono si lo deseas
             });
         });
     </script>
