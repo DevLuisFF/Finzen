@@ -247,11 +247,6 @@ function formatMoney($amount) {
                             <i class="bi bi-arrow-left-right me-1"></i> Transacciones
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="transacciones-recurrentes.php">
-                            <i class="bi bi-arrow-left-right me-1"></i> Transacciones Recurrentes
-                        </a>
-                    </li>
                 </ul>
                 <div class="d-flex">
                     <a href="../auth/logout.php" class="btn btn-outline-danger">
