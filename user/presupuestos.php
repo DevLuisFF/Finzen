@@ -598,7 +598,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                <i class="bi bi-piggy-bank me-2"></i>
+                
                 Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
