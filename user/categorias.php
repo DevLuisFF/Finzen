@@ -258,31 +258,107 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             --bs-blue: #0d6efd;
             --bs-cyan: #0dcaf0;
             --bs-yellow: #ffc107;
+            --bs-light: #f8f9fa;
+            --bs-dark: #212529;
+            --bs-border: #e9ecef;
         }
+        
         body {
-            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background-color: #f8f9fa;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: #fafbfc;
+            color: #333;
+            line-height: 1.5;
         }
+        
         .navbar {
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
-            background-color: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--bs-border);
+            padding: 0.75rem 0;
         }
+        
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--bs-primary) !important;
+        }
+        
+        .nav-link {
+            font-weight: 500;
+            padding: 0.5rem 1rem !important;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
+            color: #666 !important;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary) !important;
+        }
+        
         .card {
             border: none;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
+            border-radius: 1rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+            transition: all 0.3s ease;
+            background: white;
+            overflow: hidden;
         }
+        
         .card:hover {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
             transform: translateY(-2px);
         }
+        
+        .stats-card {
+            border-left: 4px solid;
+            position: relative;
+        }
+        
+        .stats-card.ingreso {
+            border-left-color: var(--bs-success);
+        }
+        
+        .stats-card.gasto {
+            border-left-color: var(--bs-danger);
+        }
+        
+        .metric-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1rem;
+            font-size: 1.25rem;
+        }
+        
         .badge-custom {
-            font-size: 0.85em;
-            padding: 0.35em 0.65em;
+            font-size: 0.75rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 0.75rem;
+            font-weight: 500;
         }
-        .pagination .page-item.active .page-link {
-            background-color: var(--bs-primary);
-            border-color: var(--bs-primary);
+        
+        .category-badge {
+            font-size: 0.75rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 0.75rem;
         }
+        
+        .btn {
+            border-radius: 0.75rem;
+            font-weight: 500;
+            padding: 0.5rem 1.25rem;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-sm {
+            padding: 0.375rem 0.875rem;
+            font-size: 0.875rem;
+        }
+        
         .color-circle {
             width: 24px;
             height: 24px;
@@ -292,40 +368,148 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             border: 2px solid #fff;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
+        
         .color-option {
             display: flex;
             align-items: center;
             padding: 0.5rem;
-            border-radius: 8px;
+            border-radius: 0.75rem;
             transition: all 0.2s;
             cursor: pointer;
+            margin-bottom: 0.5rem;
         }
+        
         .color-option:hover {
-            background-color: #f8f9fa;
+            background-color: var(--bs-light);
         }
-        .color-option input[type="radio"]:checked + .color-selector {
-            border: 2px solid var(--bs-primary);
-            padding: 0.25rem;
-            border-radius: 8px;
+        
+        .color-option.active {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            border: 1px solid var(--bs-primary);
         }
+        
         .color-selector {
             display: flex;
             align-items: center;
             width: 100%;
         }
+        
         .icon-preview {
             font-size: 1.5rem;
             margin-right: 8px;
         }
-        .stats-card {
-            border-left: 4px solid;
+        
+        .category-card {
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
         }
-        .stats-card.ingreso {
-            border-left-color: var(--bs-success);
+        
+        .category-card:hover {
+            border-color: var(--bs-border);
+            transform: translateY(-4px);
         }
-        .stats-card.gasto {
-            border-left-color: var(--bs-danger);
+        
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 700;
+            color: var(--bs-dark);
         }
+        
+        .card-title {
+            font-weight: 600;
+            color: var(--bs-dark);
+            margin-bottom: 1rem;
+        }
+        
+        .container {
+            max-width: 1400px;
+        }
+        
+        .modal-content {
+            border: none;
+            border-radius: 1rem;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
+        }
+        
+        .modal-header {
+            border-bottom: 1px solid var(--bs-border);
+            padding: 1.5rem;
+        }
+        
+        .modal-body {
+            padding: 1.5rem;
+        }
+        
+        .modal-footer {
+            border-top: 1px solid var(--bs-border);
+            padding: 1.5rem;
+        }
+        
+        .form-control, .form-select {
+            border-radius: 0.75rem;
+            border: 1px solid var(--bs-border);
+            padding: 0.75rem 1rem;
+            transition: all 0.2s ease;
+        }
+        
+        .form-control:focus, .form-select:focus {
+            border-color: var(--bs-primary);
+            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.1);
+        }
+        
+        .alert {
+            border: none;
+            border-radius: 0.75rem;
+            padding: 1rem 1.25rem;
+        }
+        
+        .pagination .page-link {
+            border: none;
+            border-radius: 0.5rem;
+            margin: 0 0.25rem;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .pagination .page-item.active .page-link {
+            background-color: var(--bs-primary);
+            color: white;
+        }
+        
+        .pagination .page-link:hover {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary);
+        }
+        
+        .empty-state {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: #6c757d;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        
+        .dropdown-menu {
+            border: none;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            padding: 0.5rem;
+        }
+        
+        .dropdown-item {
+            border-radius: 0.5rem;
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+        }
+        
+        .dropdown-item:hover {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary);
+        }
+        
         .text-pink { color: var(--bs-pink) !important; }
         .text-purple { color: var(--bs-purple) !important; }
         .text-indigo { color: var(--bs-indigo) !important; }
@@ -333,15 +517,21 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         .text-blue { color: var(--bs-blue) !important; }
         .text-cyan { color: var(--bs-cyan) !important; }
         .text-yellow { color: var(--bs-yellow) !important; }
-        .category-badge {
-            font-size: 0.75rem;
-        }
+        
         @media (max-width: 768px) {
-            .navbar-nav {
-                flex-direction: row;
+            .container {
+                padding-left: 1rem;
+                padding-right: 1rem;
             }
-            .nav-item {
-                margin-right: 0.5rem;
+            
+            .color-option {
+                padding: 0.375rem;
+            }
+            
+            .color-circle {
+                width: 20px;
+                height: 20px;
+                margin-right: 6px;
             }
         }
     </style>
@@ -351,8 +541,8 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                <i class="bi bi-cash-stack me-2"></i>
-                <strong>Finzen</strong>
+                <i class="bi bi-piggy-bank me-2"></i>
+                Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -361,33 +551,33 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="index.php">
-                            <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                            <i class="bi bi-speedometer2 me-2"></i> Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="cuentas.php">
-                            <i class="bi bi-wallet2 me-1"></i> Cuentas
+                            <i class="bi bi-wallet2 me-2"></i> Cuentas
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link active" href="categorias.php">
-                            <i class="bi bi-tags me-1"></i> Categorías
+                            <i class="bi bi-tags me-2"></i> Categorías
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="presupuestos.php">
-                            <i class="bi bi-pie-chart me-1"></i> Presupuestos
+                            <i class="bi bi-pie-chart me-2"></i> Presupuestos
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="transacciones.php">
-                            <i class="bi bi-arrow-left-right me-1"></i> Transacciones
+                            <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
                 </ul>
-                <div class="d-flex">
-                    <a href="../auth/logout.php" class="btn btn-outline-danger">
-                        <i class="bi bi-box-arrow-right me-1"></i> Cerrar Sesión
+                <div class="d-flex align-items-center">
+                    <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
+                        <i class="bi bi-box-arrow-right me-1"></i> Salir
                     </a>
                 </div>
             </div>
@@ -433,7 +623,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                                 <h6 class="card-title text-muted mb-1">Categorías de Ingreso</h6>
                                 <h3 class="text-success mb-0"><?= $stats['ingreso'] ?></h3>
                             </div>
-                            <div class="icon-preview text-success">
+                            <div class="metric-icon bg-success bg-opacity-10 text-success">
                                 <i class="bi bi-arrow-down-circle"></i>
                             </div>
                         </div>
@@ -448,7 +638,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                                 <h6 class="card-title text-muted mb-1">Categorías de Gasto</h6>
                                 <h3 class="text-danger mb-0"><?= $stats['gasto'] ?></h3>
                             </div>
-                            <div class="icon-preview text-danger">
+                            <div class="metric-icon bg-danger bg-opacity-10 text-danger">
                                 <i class="bi bi-arrow-up-circle"></i>
                             </div>
                         </div>
@@ -490,8 +680,8 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         <div class="card">
             <div class="card-body">
                 <?php if (empty($categorias)): ?>
-                    <div class="text-center py-5">
-                        <i class="bi bi-tags display-4 text-muted mb-3"></i>
+                    <div class="empty-state">
+                        <i class="bi bi-tags"></i>
                         <h3 class="mb-2">No se encontraron categorías</h3>
                         <p class="text-muted mb-4">No hay categorías que coincidan con los filtros seleccionados</p>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
@@ -502,7 +692,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                     <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
                         <?php foreach ($categorias as $categoria): ?>
                         <div class="col">
-                            <div class="card h-100">
+                            <div class="card category-card h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
                                         <div>
@@ -751,6 +941,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                         const colorInput = document.querySelector(`#edit_colores_container input[value="${color}"]`);
                         if (colorInput) {
                             colorInput.checked = true;
+                            colorInput.closest('.color-option').classList.add('active');
                         }
                     }
                 });
@@ -761,21 +952,34 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                 option.addEventListener('click', function() {
                     const radio = this.querySelector('input[type="radio"]');
                     if (radio) {
-                        radio.checked = true;
                         // Remover selección anterior
                         document.querySelectorAll('.color-option').forEach(opt => {
                             opt.classList.remove('active');
                         });
+                        // Marcar como seleccionado
                         this.classList.add('active');
+                        radio.checked = true;
                     }
                 });
             });
 
-            // Mostrar preview del icono seleccionado
-            document.getElementById('icono').addEventListener('change', function() {
-                const selectedOption = this.options[this.selectedIndex];
-                const iconClass = selectedOption.getAttribute('data-class');
-                // Podrías agregar aquí un preview del icono si lo deseas
+            // Inicializar selección de color en modal de agregar
+            document.getElementById('addCategoryModal').addEventListener('show.bs.modal', function() {
+                const firstColor = document.querySelector('#addCategoryModal .color-option:first-child');
+                if (firstColor) {
+                    firstColor.classList.add('active');
+                    const radio = firstColor.querySelector('input[type="radio"]');
+                    if (radio) radio.checked = true;
+                }
+            });
+
+            // Resetear modales al cerrar
+            document.querySelectorAll('.modal').forEach(modal => {
+                modal.addEventListener('hidden.bs.modal', function() {
+                    document.querySelectorAll('.color-option').forEach(opt => {
+                        opt.classList.remove('active');
+                    });
+                });
             });
         });
     </script>

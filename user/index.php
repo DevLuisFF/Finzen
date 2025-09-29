@@ -274,64 +274,224 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             --bs-danger: #dc3545;
             --bs-warning: #ffc107;
             --bs-info: #0dcaf0;
+            --bs-light: #f8f9fa;
+            --bs-dark: #212529;
+            --bs-border: #e9ecef;
         }
+        
         body {
-            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background-color: #f8f9fa;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: #fafbfc;
+            color: #333;
+            line-height: 1.5;
         }
+        
         .navbar {
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
-            background-color: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--bs-border);
+            padding: 0.75rem 0;
         }
+        
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--bs-primary) !important;
+        }
+        
+        .nav-link {
+            font-weight: 500;
+            padding: 0.5rem 1rem !important;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
+            color: #666 !important;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary) !important;
+        }
+        
         .card {
             border: none;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
+            border-radius: 1rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+            transition: all 0.3s ease;
+            background: white;
+            overflow: hidden;
         }
+        
         .card:hover {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
             transform: translateY(-2px);
         }
+        
         .metric-card {
-            border-left: 4px solid var(--bs-primary);
-        }
-        .metric-card.success {
-            border-left-color: var(--bs-success);
-        }
-        .metric-card.danger {
-            border-left-color: var(--bs-danger);
-        }
-        .metric-card.warning {
-            border-left-color: var(--bs-warning);
-        }
-        .metric-card.info {
-            border-left-color: var(--bs-info);
-        }
-        .chart-container {
+            border-left: 4px solid transparent;
             position: relative;
-            height: 300px;
         }
-        .transaction-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
+        
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, rgba(255,255,255,0.1) 0%, transparent 100%);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .metric-card:hover::before {
+            opacity: 1;
+        }
+        
+        .metric-card.primary { border-left-color: var(--bs-primary); }
+        .metric-card.success { border-left-color: var(--bs-success); }
+        .metric-card.danger { border-left-color: var(--bs-danger); }
+        .metric-card.warning { border-left-color: var(--bs-warning); }
+        .metric-card.info { border-left-color: var(--bs-info); }
+        
+        .metric-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 15px;
+            margin-right: 1rem;
+            font-size: 1.25rem;
         }
+        
+        .metric-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+        
+        .metric-label {
+            font-size: 0.875rem;
+            color: #6c757d;
+            font-weight: 500;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            padding: 1rem;
+        }
+        
         .transaction-item {
-            transition: background-color 0.2s;
+            transition: all 0.2s ease;
+            border-radius: 0.5rem;
         }
+        
         .transaction-item:hover {
-            background-color: rgba(0,0,0,0.025);
+            background-color: rgba(0, 0, 0, 0.02);
+            transform: translateX(4px);
         }
-        .export-btn {
+        
+        .transaction-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1rem;
+            font-size: 1rem;
+        }
+        
+        .badge {
+            font-size: 0.75rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 0.75rem;
+            font-weight: 500;
+        }
+        
+        .btn {
+            border-radius: 0.75rem;
+            font-weight: 500;
+            padding: 0.5rem 1.25rem;
+            transition: all 0.2s ease;
+        }
+        
+        .btn-sm {
+            padding: 0.375rem 0.875rem;
             font-size: 0.875rem;
         }
+        
+        .table {
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+        
+        .table th {
+            border: none;
+            background-color: var(--bs-light);
+            font-weight: 600;
+            color: #495057;
+            padding: 1rem;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .table td {
+            border: none;
+            padding: 1rem;
+            vertical-align: middle;
+        }
+        
+        .table tbody tr {
+            border-bottom: 1px solid var(--bs-border);
+        }
+        
+        .table tbody tr:last-child {
+            border-bottom: none;
+        }
+        
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 700;
+            color: var(--bs-dark);
+        }
+        
+        .card-title {
+            font-weight: 600;
+            color: var(--bs-dark);
+            margin-bottom: 1.5rem;
+        }
+        
+        .container {
+            max-width: 1400px;
+        }
+        
         @media (max-width: 768px) {
             .chart-container {
                 height: 250px;
             }
+            
+            .metric-value {
+                font-size: 1.5rem;
+            }
+            
+            .container {
+                padding-left: 1rem;
+                padding-right: 1rem;
+            }
+        }
+        
+        .empty-state {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: #6c757d;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
         }
     </style>
 </head>
@@ -340,8 +500,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                <i class="bi bi-cash-stack me-2"></i>
-                <strong>Finzen</strong>
+                <i class="bi bi-piggy-bank me-2"></i>
+                Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -350,36 +510,36 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link active" href="index.php">
-                            <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                            <i class="bi bi-speedometer2 me-2"></i> Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="cuentas.php">
-                            <i class="bi bi-wallet2 me-1"></i> Cuentas
+                            <i class="bi bi-wallet2 me-2"></i> Cuentas
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="categorias.php">
-                            <i class="bi bi-tags me-1"></i> Categorías
+                            <i class="bi bi-tags me-2"></i> Categorías
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="presupuestos.php">
-                            <i class="bi bi-pie-chart me-1"></i> Presupuestos
+                            <i class="bi bi-pie-chart me-2"></i> Presupuestos
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="transacciones.php">
-                            <i class="bi bi-arrow-left-right me-1"></i> Transacciones
+                            <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
                 </ul>
-                <div class="d-flex">
-                    <a href="?export=transacciones" class="btn btn-outline-success btn-sm me-2 export-btn">
+                <div class="d-flex align-items-center gap-2">
+                    <a href="?export=transacciones" class="btn btn-outline-success btn-sm">
                         <i class="bi bi-download me-1"></i> Exportar CSV
                     </a>
                     <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
-                        <i class="bi bi-box-arrow-right me-1"></i> Cerrar Sesión
+                        <i class="bi bi-box-arrow-right me-1"></i> Salir
                     </a>
                 </div>
             </div>
@@ -388,20 +548,25 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
 
     <!-- Main Content -->
     <div class="container py-4">
-        <h1 class="mb-4">Dashboard</h1>
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h1 class="mb-0">Dashboard</h1>
+            <div class="text-muted">
+                <?= date('d M Y') ?>
+            </div>
+        </div>
 
         <!-- Metrics Row -->
         <div class="row g-4 mb-4">
             <div class="col-md-6 col-lg-3">
-                <div class="card metric-card">
+                <div class="card metric-card primary">
                     <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon bg-primary bg-opacity-10 text-primary">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon bg-primary bg-opacity-10 text-primary">
                                 <i class="bi bi-wallet2"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Cuentas activas</h6>
-                                <h3 class="mb-0"><?= htmlspecialchars($metrics['total_cuentas']) ?></h3>
+                                <div class="metric-label">Cuentas activas</div>
+                                <div class="metric-value"><?= htmlspecialchars($metrics['total_cuentas']) ?></div>
                             </div>
                         </div>
                     </div>
@@ -410,13 +575,13 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             <div class="col-md-6 col-lg-3">
                 <div class="card metric-card success">
                     <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon bg-success bg-opacity-10 text-success">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon bg-success bg-opacity-10 text-success">
                                 <i class="bi bi-cash-stack"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Saldo total</h6>
-                                <h3 class="mb-0"><?= formatMoney($metrics['saldo_total']) ?></h3>
+                                <div class="metric-label">Saldo total</div>
+                                <div class="metric-value"><?= formatMoney($metrics['saldo_total']) ?></div>
                             </div>
                         </div>
                     </div>
@@ -425,13 +590,13 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             <div class="col-md-6 col-lg-3">
                 <div class="card metric-card info">
                     <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon bg-info bg-opacity-10 text-info">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon bg-info bg-opacity-10 text-info">
                                 <i class="bi bi-pie-chart"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Presupuestos activos</h6>
-                                <h3 class="mb-0"><?= htmlspecialchars($metrics['presupuestos_activos']) ?></h3>
+                                <div class="metric-label">Presupuestos activos</div>
+                                <div class="metric-value"><?= htmlspecialchars($metrics['presupuestos_activos']) ?></div>
                             </div>
                         </div>
                     </div>
@@ -440,15 +605,15 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             <div class="col-md-6 col-lg-3">
                 <div class="card metric-card <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'success' : 'danger' ?>">
                     <div class="card-body">
-                        <div class="d-flex align-items-center mb-3">
-                            <div class="transaction-icon <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger' ?>">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger' ?>">
                                 <i class="bi bi-graph-up"></i>
                             </div>
                             <div>
-                                <h6 class="text-muted mb-1">Balance mensual</h6>
-                                <h3 class="mb-0 <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'text-success' : 'text-danger' ?>">
+                                <div class="metric-label">Balance mensual</div>
+                                <div class="metric-value <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'text-success' : 'text-danger' ?>">
                                     <?= formatMoney($metrics['ingresos'] - $metrics['gastos']) ?>
-                                </h3>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -461,7 +626,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             <div class="col-lg-8">
                 <div class="card">
                     <div class="card-body">
-                        <h5 class="card-title mb-4">Flujo de efectivo (6 meses)</h5>
+                        <h5 class="card-title">Flujo de efectivo (6 meses)</h5>
                         <div class="chart-container">
                             <canvas id="monthlyFlowChart"></canvas>
                         </div>
@@ -471,7 +636,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             <div class="col-lg-4">
                 <div class="card">
                     <div class="card-body">
-                        <h5 class="card-title mb-4">Gastos por categoría</h5>
+                        <h5 class="card-title">Gastos por categoría</h5>
                         <div class="chart-container">
                             <canvas id="expenseCategoryChart"></canvas>
                         </div>
@@ -481,45 +646,47 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
         </div>
 
         <!-- Recent Transactions -->
-        <div class="card mb-4">
+        <div class="card">
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-4">
                     <h5 class="mb-0">Transacciones recientes</h5>
-                    <div>
-                        <a href="?export=transacciones" class="btn btn-sm btn-outline-success me-2">
-                            <i class="bi bi-download me-1"></i> Exportar CSV
+                    <div class="d-flex gap-2">
+                        <a href="?export=transacciones" class="btn btn-outline-success btn-sm">
+                            <i class="bi bi-download me-1"></i> Exportar
                         </a>
-                        <a href="transacciones.php" class="btn btn-sm btn-outline-primary">
+                        <a href="transacciones.php" class="btn btn-primary btn-sm">
                             Ver todas <i class="bi bi-chevron-right ms-1"></i>
                         </a>
                     </div>
                 </div>
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Fecha</th>
-                                <th>Descripción</th>
-                                <th>Categoría</th>
-                                <th>Cuenta</th>
-                                <th class="text-end">Monto</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            <?php if (empty($recentTransactions)): ?>
+                
+                <?php if (empty($recentTransactions)): ?>
+                    <div class="empty-state">
+                        <i class="bi bi-receipt"></i>
+                        <p class="mb-0">No hay transacciones recientes</p>
+                    </div>
+                <?php else: ?>
+                    <div class="table-responsive">
+                        <table class="table table-hover">
+                            <thead class="table-light">
                                 <tr>
-                                    <td colspan="5" class="text-center text-muted py-4">
-                                        <i class="bi bi-inbox display-4 d-block mb-2"></i>
-                                        No hay transacciones recientes
-                                    </td>
+                                    <th>Fecha</th>
+                                    <th>Descripción</th>
+                                    <th>Categoría</th>
+                                    <th>Cuenta</th>
+                                    <th class="text-end">Monto</th>
                                 </tr>
-                            <?php else: ?>
+                            </thead>
+                            <tbody>
                                 <?php foreach ($recentTransactions as $t): ?>
                                 <tr class="transaction-item">
-                                    <td><?= htmlspecialchars(date('d M', strtotime($t['fecha']))) ?></td>
-                                    <td><?= htmlspecialchars($t['descripcion'] ?? 'Sin descripción') ?></td>
                                     <td>
-                                        <span class="badge" style="background-color: <?= htmlspecialchars($t['color']) ?>;">
+                                        <div class="fw-medium"><?= htmlspecialchars(date('d M', strtotime($t['fecha']))) ?></div>
+                                        <small class="text-muted"><?= htmlspecialchars(date('H:i', strtotime($t['fecha']))) ?></small>
+                                    </td>
+                                    <td class="fw-medium"><?= htmlspecialchars($t['descripcion'] ?? 'Sin descripción') ?></td>
+                                    <td>
+                                        <span class="badge" style="background-color: <?= htmlspecialchars($t['color']) ?>; color: white;">
                                             <?= htmlspecialchars($t['categoria']) ?>
                                         </span>
                                     </td>
@@ -532,10 +699,10 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
-                            <?php endif; ?>
-                        </tbody>
-                    </table>
-                </div>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -555,14 +722,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     {
                         label: 'Ingresos',
                         data: <?= json_encode(array_map(function($v) { return $v/100; }, $monthlyFlow['ingresos'])) ?>,
-                        backgroundColor: '#198754',
-                        borderRadius: 4,
+                        backgroundColor: 'rgba(25, 135, 84, 0.8)',
+                        borderRadius: 6,
+                        borderWidth: 0,
                     },
                     {
                         label: 'Gastos',
                         data: <?= json_encode(array_map(function($v) { return $v/100; }, $monthlyFlow['gastos'])) ?>,
-                        backgroundColor: '#dc3545',
-                        borderRadius: 4,
+                        backgroundColor: 'rgba(220, 53, 69, 0.8)',
+                        borderRadius: 6,
+                        borderWidth: 0,
                     }
                 ]
             },
@@ -570,8 +739,19 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 responsive: true,
                 maintainAspectRatio: false,
                 plugins: {
-                    legend: { position: 'top' },
+                    legend: { 
+                        position: 'top',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 15
+                        }
+                    },
                     tooltip: {
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        titleColor: '#333',
+                        bodyColor: '#666',
+                        borderColor: 'rgba(0, 0, 0, 0.1)',
+                        borderWidth: 1,
                         callbacks: {
                             label: function(context) {
                                 return context.dataset.label + ': ' + formatCurrency(context.raw);
@@ -580,8 +760,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     }
                 },
                 scales: {
+                    x: {
+                        grid: {
+                            display: false
+                        }
+                    },
                     y: {
                         beginAtZero: true,
+                        grid: {
+                            color: 'rgba(0, 0, 0, 0.05)'
+                        },
                         ticks: {
                             callback: function(value) {
                                 return formatCurrency(value);
@@ -601,15 +789,31 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 datasets: [{
                     data: <?= json_encode(array_map(function($v) { return $v/100; }, $expenseByCategory['data'])) ?>,
                     backgroundColor: <?= json_encode($expenseByCategory['colors']) ?>,
+                    borderWidth: 0,
+                    hoverOffset: 8
                 }]
             },
             options: {
                 responsive: true,
                 maintainAspectRatio: false,
-                cutout: '70%',
+                cutout: '65%',
                 plugins: {
-                    legend: { position: 'right' },
+                    legend: { 
+                        position: 'right',
+                        labels: {
+                            usePointStyle: true,
+                            padding: 15,
+                            font: {
+                                size: 11
+                            }
+                        }
+                    },
                     tooltip: {
+                        backgroundColor: 'rgba(255, 255, 255, 0.95)',
+                        titleColor: '#333',
+                        bodyColor: '#666',
+                        borderColor: 'rgba(0, 0, 0, 0.1)',
+                        borderWidth: 1,
                         callbacks: {
                             label: function(context) {
                                 const total = context.dataset.data.reduce((a, b) => a + b, 0);

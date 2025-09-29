@@ -271,84 +271,324 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             --bs-success: #198754;
             --bs-danger: #dc3545;
             --bs-warning: #ffc107;
+            --bs-info: #0dcaf0;
+            --bs-light: #f8f9fa;
+            --bs-dark: #212529;
+            --bs-border: #e9ecef;
         }
+        
         body {
-            font-family: 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
-            background-color: #f8f9fa;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            background-color: #fafbfc;
+            color: #333;
+            line-height: 1.5;
         }
+        
         .navbar {
-            box-shadow: 0 2px 4px rgba(0,0,0,.1);
-            background-color: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid var(--bs-border);
+            padding: 0.75rem 0;
         }
+        
+        .navbar-brand {
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--bs-primary) !important;
+        }
+        
+        .nav-link {
+            font-weight: 500;
+            padding: 0.5rem 1rem !important;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
+            color: #666 !important;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary) !important;
+        }
+        
         .card {
             border: none;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            transition: transform 0.2s;
+            border-radius: 1rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+            transition: all 0.3s ease;
+            background: white;
+            overflow: hidden;
         }
+        
         .card:hover {
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
             transform: translateY(-2px);
         }
-        .badge-custom {
-            font-size: 0.85em;
-            padding: 0.35em 0.65em;
+        
+        .stats-card {
+            border-left: 4px solid;
+            position: relative;
         }
+        
+        .stats-card.primary {
+            border-left-color: var(--bs-primary);
+        }
+        
+        .stats-card.success {
+            border-left-color: var(--bs-success);
+        }
+        
+        .stats-card.danger {
+            border-left-color: var(--bs-danger);
+        }
+        
+        .metric-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 1rem;
+            font-size: 1.25rem;
+        }
+        
+        .badge-custom {
+            font-size: 0.75rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 0.75rem;
+            font-weight: 500;
+        }
+        
         .progress-container {
             height: 8px;
-            background-color: #e9ecef;
+            background-color: var(--bs-light);
             border-radius: 4px;
             margin-top: 0.5rem;
             overflow: hidden;
         }
+        
         .progress-bar {
             height: 100%;
             border-radius: 4px;
             transition: width 0.6s ease;
         }
+        
         .progress-success {
-            background-color: var(--bs-success);
+            background: linear-gradient(90deg, var(--bs-success), #20c997);
         }
+        
         .progress-warning {
-            background-color: var(--bs-warning);
+            background: linear-gradient(90deg, var(--bs-warning), #fd7e14);
         }
+        
         .progress-danger {
-            background-color: var(--bs-danger);
+            background: linear-gradient(90deg, var(--bs-danger), #e52535);
         }
-        .table-responsive {
-            overflow-x: auto;
+        
+        .btn {
+            border-radius: 0.75rem;
+            font-weight: 500;
+            padding: 0.5rem 1.25rem;
+            transition: all 0.2s ease;
         }
-        .pagination .page-item.active .page-link {
-            background-color: var(--bs-primary);
-            border-color: var(--bs-primary);
+        
+        .btn-sm {
+            padding: 0.375rem 0.875rem;
+            font-size: 0.875rem;
         }
+        
+        .table {
+            border-radius: 1rem;
+            overflow: hidden;
+        }
+        
+        .table th {
+            border: none;
+            background-color: var(--bs-light);
+            font-weight: 600;
+            color: #495057;
+            padding: 1rem;
+            font-size: 0.875rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .table td {
+            border: none;
+            padding: 1rem;
+            vertical-align: middle;
+        }
+        
+        .table tbody tr {
+            border-bottom: 1px solid var(--bs-border);
+            transition: all 0.2s ease;
+        }
+        
+        .table tbody tr:hover {
+            background-color: rgba(0, 0, 0, 0.02);
+            transform: translateX(4px);
+        }
+        
+        .table tbody tr:last-child {
+            border-bottom: none;
+        }
+        
         .category-icon {
-            width: 32px;
-            height: 32px;
-            border-radius: 6px;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            margin-right: 10px;
+            margin-right: 12px;
             color: white;
-            font-size: 0.9rem;
+            font-size: 1rem;
         }
-        .stats-card {
-            border-left: 4px solid var(--bs-primary);
+        
+        h1, h2, h3, h4, h5, h6 {
+            font-weight: 700;
+            color: var(--bs-dark);
         }
-        .stats-card.success {
-            border-left-color: var(--bs-success);
+        
+        .card-title {
+            font-weight: 600;
+            color: var(--bs-dark);
+            margin-bottom: 1.5rem;
         }
-        .stats-card.danger {
-            border-left-color: var(--bs-danger);
+        
+        .container {
+            max-width: 1400px;
         }
-        .stats-card.warning {
-            border-left-color: var(--bs-warning);
+        
+        .modal-content {
+            border: none;
+            border-radius: 1rem;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
         }
+        
+        .modal-header {
+            border-bottom: 1px solid var(--bs-border);
+            padding: 1.5rem;
+        }
+        
+        .modal-body {
+            padding: 1.5rem;
+        }
+        
+        .modal-footer {
+            border-top: 1px solid var(--bs-border);
+            padding: 1.5rem;
+        }
+        
+        .form-control, .form-select {
+            border-radius: 0.75rem;
+            border: 1px solid var(--bs-border);
+            padding: 0.75rem 1rem;
+            transition: all 0.2s ease;
+        }
+        
+        .form-control:focus, .form-select:focus {
+            border-color: var(--bs-primary);
+            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.1);
+        }
+        
+        .form-check-input:checked {
+            background-color: var(--bs-primary);
+            border-color: var(--bs-primary);
+        }
+        
+        .alert {
+            border: none;
+            border-radius: 0.75rem;
+            padding: 1rem 1.25rem;
+        }
+        
+        .pagination .page-link {
+            border: none;
+            border-radius: 0.5rem;
+            margin: 0 0.25rem;
+            color: #666;
+            font-weight: 500;
+        }
+        
+        .pagination .page-item.active .page-link {
+            background-color: var(--bs-primary);
+            color: white;
+        }
+        
+        .pagination .page-link:hover {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary);
+        }
+        
+        .empty-state {
+            padding: 3rem 1rem;
+            text-align: center;
+            color: #6c757d;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            opacity: 0.5;
+        }
+        
+        .dropdown-menu {
+            border: none;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            padding: 0.5rem;
+        }
+        
+        .dropdown-item {
+            border-radius: 0.5rem;
+            padding: 0.5rem 1rem;
+            font-weight: 500;
+        }
+        
+        .dropdown-item:hover {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            color: var(--bs-primary);
+        }
+        
+        .budget-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .status-safe {
+            background-color: var(--bs-success);
+        }
+        
+        .status-warning {
+            background-color: var(--bs-warning);
+        }
+        
+        .status-danger {
+            background-color: var(--bs-danger);
+        }
+        
         @media (max-width: 768px) {
-            .navbar-nav {
-                flex-direction: row;
+            .container {
+                padding-left: 1rem;
+                padding-right: 1rem;
             }
-            .nav-item {
-                margin-right: 0.5rem;
+            
+            .table-responsive {
+                font-size: 0.875rem;
+            }
+            
+            .category-icon {
+                width: 32px;
+                height: 32px;
+                margin-right: 8px;
             }
         }
     </style>
@@ -358,8 +598,8 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                <i class="bi bi-cash-stack me-2"></i>
-                <strong>Finzen</strong>
+                <i class="bi bi-piggy-bank me-2"></i>
+                Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -368,33 +608,33 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="index.php">
-                            <i class="bi bi-speedometer2 me-1"></i> Dashboard
+                            <i class="bi bi-speedometer2 me-2"></i> Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="cuentas.php">
-                            <i class="bi bi-wallet2 me-1"></i> Cuentas
+                            <i class="bi bi-wallet2 me-2"></i> Cuentas
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="categorias.php">
-                            <i class="bi bi-tags me-1"></i> Categorías
+                            <i class="bi bi-tags me-2"></i> Categorías
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link active" href="presupuestos.php">
-                            <i class="bi bi-pie-chart me-1"></i> Presupuestos
+                            <i class="bi bi-pie-chart me-2"></i> Presupuestos
                         </a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="transacciones.php">
-                            <i class="bi bi-arrow-left-right me-1"></i> Transacciones
+                            <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
                 </ul>
-                <div class="d-flex">
-                    <a href="../auth/logout.php" class="btn btn-outline-danger">
-                        <i class="bi bi-box-arrow-right me-1"></i> Cerrar Sesión
+                <div class="d-flex align-items-center">
+                    <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
+                        <i class="bi bi-box-arrow-right me-1"></i> Salir
                     </a>
                 </div>
             </div>
@@ -433,15 +673,15 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
         <!-- Estadísticas -->
         <div class="row mb-4">
             <div class="col-md-4">
-                <div class="card stats-card">
+                <div class="card stats-card primary">
                     <div class="card-body">
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <h6 class="card-title text-muted mb-1">Total Presupuestos</h6>
                                 <h3 class="text-primary mb-0"><?= $stats['total_presupuestos'] ?></h3>
                             </div>
-                            <div class="text-primary">
-                                <i class="bi bi-pie-chart fs-2"></i>
+                            <div class="metric-icon bg-primary bg-opacity-10 text-primary">
+                                <i class="bi bi-pie-chart"></i>
                             </div>
                         </div>
                     </div>
@@ -455,8 +695,8 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                                 <h6 class="card-title text-muted mb-1">Total Presupuestado</h6>
                                 <h3 class="text-success mb-0"><?= formatMoney($stats['total_presupuestado']) ?></h3>
                             </div>
-                            <div class="text-success">
-                                <i class="bi bi-cash-coin fs-2"></i>
+                            <div class="metric-icon bg-success bg-opacity-10 text-success">
+                                <i class="bi bi-cash-coin"></i>
                             </div>
                         </div>
                     </div>
@@ -470,8 +710,8 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                                 <h6 class="card-title text-muted mb-1">Total Gastado</h6>
                                 <h3 class="text-danger mb-0"><?= formatMoney($stats['total_gastado']) ?></h3>
                             </div>
-                            <div class="text-danger">
-                                <i class="bi bi-graph-up-arrow fs-2"></i>
+                            <div class="metric-icon bg-danger bg-opacity-10 text-danger">
+                                <i class="bi bi-graph-up-arrow"></i>
                             </div>
                         </div>
                     </div>
@@ -526,8 +766,8 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
         <div class="card">
             <div class="card-body">
                 <?php if (empty($presupuestos)): ?>
-                    <div class="text-center py-5">
-                        <i class="bi bi-pie-chart display-4 text-muted mb-3"></i>
+                    <div class="empty-state">
+                        <i class="bi bi-pie-chart"></i>
                         <h3 class="mb-2">No se encontraron presupuestos</h3>
                         <p class="text-muted mb-4">No hay presupuestos que coincidan con los filtros seleccionados</p>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addBudgetModal">
@@ -554,6 +794,8 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                                     $progreso = $presupuesto["monto"] > 0 ? min(100, ($presupuesto["gastos_actuales"] / $presupuesto["monto"]) * 100) : 0;
                                     $progresoClase = $progreso > 90 ? 'progress-danger' :
                                                     ($progreso > 70 ? 'progress-warning' : 'progress-success');
+                                    $statusClase = $progreso > 90 ? 'status-danger' :
+                                                 ($progreso > 70 ? 'status-warning' : 'status-safe');
                                     $restante = $presupuesto["monto"] - $presupuesto["gastos_actuales"];
                                 ?>
                                 <tr>
@@ -575,9 +817,12 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                                         <span class="fw-bold"><?= formatMoney($presupuesto["monto"]) ?></span>
                                     </td>
                                     <td>
-                                        <span class="<?= $presupuesto["gastos_actuales"] > 0 ? 'text-danger' : 'text-muted' ?>">
-                                            <?= formatMoney($presupuesto["gastos_actuales"]) ?>
-                                        </span>
+                                        <div class="budget-status">
+                                            <span class="status-indicator <?= $statusClase ?>"></span>
+                                            <span class="<?= $presupuesto["gastos_actuales"] > 0 ? 'text-danger' : 'text-muted' ?>">
+                                                <?= formatMoney($presupuesto["gastos_actuales"]) ?>
+                                            </span>
+                                        </div>
                                     </td>
                                     <td>
                                         <div class="progress-container">
