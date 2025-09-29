@@ -291,6 +291,56 @@ $totalPages = ceil($totalTransacciones / $perPage);
 
 // Obtener estadísticas
 $stats = $transactionRepo->getStats($usuario_id, $filters);
+
+// Función para exportar datos a CSV
+function exportToCSV($data, $filename) {
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    
+    // Escribir encabezados
+    if (!empty($data)) {
+        fputcsv($output, array_keys($data[0]));
+        
+        // Escribir datos
+        foreach ($data as $row) {
+            fputcsv($output, $row);
+        }
+    }
+    
+    fclose($output);
+    exit();
+}
+
+// Manejar exportación de transacciones
+if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
+    $stmt = $db->prepare("
+        SELECT 
+            t.fecha,
+            t.descripcion,
+            cat.nombre as categoria,
+            cat.tipo,
+            c.nombre as cuenta,
+            t.monto,
+            c.moneda
+        FROM transacciones t
+        INNER JOIN cuentas c ON t.cuenta_id = c.id
+        INNER JOIN categorias cat ON t.categoria_id = cat.id
+        WHERE c.usuario_id = ?
+        ORDER BY t.fecha DESC
+    ");
+    $stmt->execute([$usuario_id]);
+    $exportData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Formatear datos para exportación
+    foreach ($exportData as &$row) {
+        $row['monto'] = formatMoney($row['monto'], $row['moneda']);
+        unset($row['moneda']);
+    }
+    
+    exportToCSV($exportData, 'transacciones_' . date('Y-m-d'));
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -426,7 +476,7 @@ $stats = $transactionRepo->getStats($usuario_id, $filters);
                     </li>
                 </ul>
                 <div class="d-flex">
-                    <a href="?export=csv" class="btn btn-outline-success me-2">
+                    <a href="?export=transacciones" class="btn btn-outline-success btn-sm me-1 export-btn">
                         <i class="bi bi-download me-1"></i> Exportar CSV
                     </a>
                     <a href="../auth/logout.php" class="btn btn-outline-danger">
