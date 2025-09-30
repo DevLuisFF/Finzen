@@ -310,34 +310,67 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             transform: translateY(-2px);
         }
         
-        .stats-card {
-            border-left: 4px solid;
+        /* Nuevos estilos mejorados */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            border: 1px solid var(--bs-border);
+            transition: all 0.3s ease;
             position: relative;
+            overflow: hidden;
         }
         
-        .stats-card.ingreso {
-            border-left-color: var(--bs-success);
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
         }
         
-        .stats-card.gasto {
-            border-left-color: var(--bs-danger);
+        .stat-card.ingreso::before {
+            background-color: var(--bs-success);
         }
         
-        .metric-icon {
-            width: 48px;
-            height: 48px;
+        .stat-card.gasto::before {
+            background-color: var(--bs-danger);
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+        
+        .stat-icon {
+            width: 60px;
+            height: 60px;
             border-radius: 12px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 1rem;
-            font-size: 1.25rem;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
         }
         
-        .badge-custom {
-            font-size: 0.75rem;
-            padding: 0.375rem 0.75rem;
-            border-radius: 0.75rem;
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-bottom: 0.25rem;
+        }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: #6c757d;
             font-weight: 500;
         }
         
@@ -345,6 +378,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             font-size: 0.75rem;
             padding: 0.375rem 0.75rem;
             border-radius: 0.75rem;
+            font-weight: 500;
         }
         
         .btn {
@@ -377,15 +411,17 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             transition: all 0.2s;
             cursor: pointer;
             margin-bottom: 0.5rem;
+            border: 2px solid transparent;
         }
         
         .color-option:hover {
             background-color: var(--bs-light);
+            transform: translateY(-1px);
         }
         
         .color-option.active {
             background-color: rgba(var(--bs-primary-rgb), 0.1);
-            border: 1px solid var(--bs-primary);
+            border-color: var(--bs-primary);
         }
         
         .color-selector {
@@ -395,18 +431,61 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         }
         
         .icon-preview {
-            font-size: 1.5rem;
-            margin-right: 8px;
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            transition: all 0.3s ease;
         }
         
         .category-card {
             transition: all 0.3s ease;
             border: 1px solid transparent;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .category-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 4px;
+        }
+        
+        .category-card.ingreso::before {
+            background-color: var(--bs-success);
+        }
+        
+        .category-card.gasto::before {
+            background-color: var(--bs-danger);
         }
         
         .category-card:hover {
             border-color: var(--bs-border);
             transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+        
+        .category-actions {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .category-card:hover .category-actions {
+            opacity: 1;
+        }
+        
+        .btn-action {
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
         }
         
         h1, h2, h3, h4, h5, h6 {
@@ -503,11 +582,21 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             border-radius: 0.5rem;
             padding: 0.5rem 1rem;
             font-weight: 500;
+            transition: all 0.2s ease;
         }
         
         .dropdown-item:hover {
             background-color: rgba(var(--bs-primary-rgb), 0.1);
             color: var(--bs-primary);
+            transform: translateX(4px);
+        }
+        
+        .filters-card {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
         }
         
         .text-pink { color: var(--bs-pink) !important; }
@@ -517,6 +606,12 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         .text-blue { color: var(--bs-blue) !important; }
         .text-cyan { color: var(--bs-cyan) !important; }
         .text-yellow { color: var(--bs-yellow) !important; }
+        
+        .transactions-badge {
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.5rem;
+        }
         
         @media (max-width: 768px) {
             .container {
@@ -532,6 +627,14 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                 width: 20px;
                 height: 20px;
                 margin-right: 6px;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .category-actions {
+                opacity: 1;
             }
         }
     </style>
@@ -588,7 +691,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         <div class="d-flex justify-content-between align-items-center mb-4">
             <div>
                 <h1 class="mb-1">Mis Categorías</h1>
-                <p class="text-muted mb-0">Organiza tus ingresos y gastos</p>
+                <p class="text-muted mb-0">Organiza tus ingresos y gastos con categorías personalizadas</p>
             </div>
             <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
                 <i class="bi bi-plus-circle me-1"></i> Nueva Categoría
@@ -612,70 +715,73 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             </div>
         <?php endif; ?>
 
-        <!-- Estadísticas -->
-        <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="card stats-card ingreso">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <div>
-                                <h6 class="card-title text-muted mb-1">Categorías de Ingreso</h6>
-                                <h3 class="text-success mb-0"><?= $stats['ingreso'] ?></h3>
-                            </div>
-                            <div class="metric-icon bg-success bg-opacity-10 text-success">
-                                <i class="bi bi-arrow-down-circle"></i>
-                            </div>
-                        </div>
+        <!-- Estadísticas Mejoradas -->
+        <div class="stats-grid">
+            <div class="stat-card ingreso">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="stat-value text-success"><?= $stats['ingreso'] ?></div>
+                        <div class="stat-label">Categorías de Ingreso</div>
+                    </div>
+                    <div class="stat-icon bg-success bg-opacity-10 text-success">
+                        <i class="bi bi-arrow-down-circle"></i>
                     </div>
                 </div>
             </div>
-            <div class="col-md-6">
-                <div class="card stats-card gasto">
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between align-items-center">
-                            <div>
-                                <h6 class="card-title text-muted mb-1">Categorías de Gasto</h6>
-                                <h3 class="text-danger mb-0"><?= $stats['gasto'] ?></h3>
-                            </div>
-                            <div class="metric-icon bg-danger bg-opacity-10 text-danger">
-                                <i class="bi bi-arrow-up-circle"></i>
-                            </div>
-                        </div>
+            
+            <div class="stat-card gasto">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="stat-value text-danger"><?= $stats['gasto'] ?></div>
+                        <div class="stat-label">Categorías de Gasto</div>
+                    </div>
+                    <div class="stat-icon bg-danger bg-opacity-10 text-danger">
+                        <i class="bi bi-arrow-up-circle"></i>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="stat-value text-primary"><?= $totalCategorias ?></div>
+                        <div class="stat-label">Total de Categorías</div>
+                    </div>
+                    <div class="stat-icon bg-primary bg-opacity-10 text-primary">
+                        <i class="bi bi-tags"></i>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Filtros -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <form method="GET" action="" class="row g-3 align-items-end">
-                    <div class="col-md-4">
-                        <label for="tipo" class="form-label">Tipo de Categoría</label>
-                        <select class="form-select" id="tipo" name="tipo">
-                            <option value="">Todos los tipos</option>
-                            <?php foreach ($tipos as $codigo => $nombre): ?>
-                                <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($nombre) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="bi bi-funnel me-1"></i> Filtrar
-                        </button>
-                    </div>
-                    <div class="col-md-4 text-md-end">
-                        <span class="badge bg-primary badge-custom">
-                            <?= $totalCategorias ?> categoría<?= $totalCategorias !== 1 ? 's' : '' ?>
-                        </span>
-                    </div>
-                </form>
+        <!-- Filtros Mejorados -->
+        <div class="filters-card">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label for="tipo" class="form-label">Tipo de Categoría</label>
+                    <select class="form-select" id="tipo" name="tipo" onchange="this.form.submit()">
+                        <option value="">Todos los tipos</option>
+                        <?php foreach ($tipos as $codigo => $nombre): ?>
+                            <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars($nombre) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-funnel me-1"></i> Aplicar Filtros
+                    </button>
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <span class="badge bg-primary badge-custom">
+                        <?= $totalCategorias ?> categoría<?= $totalCategorias !== 1 ? 's' : '' ?> encontrada<?= $totalCategorias !== 1 ? 's' : '' ?>
+                    </span>
+                </div>
             </div>
         </div>
 
-        <!-- Lista de categorías -->
+        <!-- Lista de categorías mejorada -->
         <div class="card">
             <div class="card-body">
                 <?php if (empty($categorias)): ?>
@@ -691,16 +797,11 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                     <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
                         <?php foreach ($categorias as $categoria): ?>
                         <div class="col">
-                            <div class="card category-card h-100">
+                            <div class="card category-card h-100 <?= $categoria["tipo"] ?>">
                                 <div class="card-body">
-                                    <div class="d-flex justify-content-between align-items-start mb-3">
-                                        <div>
-                                            <span class="badge <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> category-badge">
-                                                <?= htmlspecialchars($tipos[$categoria["tipo"]]) ?>
-                                            </span>
-                                        </div>
+                                    <div class="category-actions">
                                         <div class="dropdown">
-                                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary btn-action" type="button" data-bs-toggle="dropdown">
                                                 <i class="bi bi-three-dots-vertical"></i>
                                             </button>
                                             <ul class="dropdown-menu">
@@ -726,16 +827,23 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                                             </ul>
                                         </div>
                                     </div>
+                                    
                                     <div class="text-center mb-3">
-                                        <div class="icon-preview mb-2" style="color: <?= htmlspecialchars($categoria["color"]) ?>">
+                                        <div class="icon-preview" style="color: <?= htmlspecialchars($categoria["color"]) ?>">
                                             <i class="bi <?= htmlspecialchars($categoria["icono"]) ?>"></i>
                                         </div>
                                         <h5 class="card-title mb-2"><?= htmlspecialchars($categoria["nombre"]) ?></h5>
+                                        <div class="mb-2">
+                                            <span class="badge <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> category-badge">
+                                                <?= htmlspecialchars($tipos[$categoria["tipo"]]) ?>
+                                            </span>
+                                        </div>
                                         <div class="color-selector justify-content-center">
                                             <span class="color-circle" style="background-color: <?= htmlspecialchars($categoria["color"]) ?>"></span>
                                             <small class="text-muted"><?= htmlspecialchars($colores[$categoria["color"]] ?? $categoria["color"]) ?></small>
                                         </div>
                                     </div>
+                                    
                                     <div class="text-center">
                                         <small class="text-muted">
                                             <i class="bi bi-clock me-1"></i>
@@ -743,10 +851,10 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                                         </small>
                                         <?php if ($categoria["total_transacciones"] > 0): ?>
                                             <br>
-                                            <small class="text-info">
+                                            <span class="badge bg-info transactions-badge">
                                                 <i class="bi bi-list-check me-1"></i>
                                                 <?= $categoria["total_transacciones"] ?> transacción(es)
-                                            </small>
+                                            </span>
                                         <?php endif; ?>
                                     </div>
                                 </div>
@@ -979,6 +1087,11 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                         opt.classList.remove('active');
                     });
                 });
+            });
+
+            // Auto-submit del filtro cuando cambia
+            document.getElementById('tipo').addEventListener('change', function() {
+                this.form.submit();
             });
         });
     </script>

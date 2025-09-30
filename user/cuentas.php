@@ -420,6 +420,120 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
             opacity: 0.5;
         }
         
+        /* Nuevos estilos mejorados */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+            border-radius: 1rem;
+            padding: 1.5rem;
+            border: 1px solid var(--bs-border);
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+        }
+        
+        .stat-icon {
+            width: 60px;
+            height: 60px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin-bottom: 1rem;
+        }
+        
+        .stat-value {
+            font-size: 1.75rem;
+            font-weight: 700;
+            line-height: 1.2;
+            margin-bottom: 0.25rem;
+        }
+        
+        .stat-label {
+            font-size: 0.875rem;
+            color: #6c757d;
+            font-weight: 500;
+        }
+        
+        .account-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+        
+        .status-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        
+        .status-active {
+            background-color: var(--bs-success);
+            color: var(--bs-success);
+        }
+        
+        .status-inactive {
+            background-color: var(--bs-danger);
+            color: var(--bs-danger);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+        
+        .btn-action {
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 0.5rem;
+            transition: all 0.2s ease;
+        }
+        
+        .filters-card {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 2rem;
+            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        }
+        
+        .account-summary {
+            background: linear-gradient(135deg, var(--bs-primary) 0%, #0a58ca 100%);
+            color: white;
+            border-radius: 1rem;
+            padding: 2rem;
+            margin-bottom: 2rem;
+        }
+        
+        .summary-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+        }
+        
+        .summary-label {
+            font-size: 1rem;
+            opacity: 0.9;
+        }
+        
         @media (max-width: 768px) {
             .container {
                 padding-left: 1rem;
@@ -432,6 +546,18 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
             
             .btn-group-vertical .btn {
                 margin-bottom: 0.5rem;
+            }
+            
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .action-buttons {
+                flex-direction: column;
+            }
+            
+            .btn-action {
+                width: 100%;
             }
         }
     </style>
@@ -512,48 +638,70 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
             </div>
         <?php endif; ?>
 
-        <!-- Resumen de saldo total -->
-        <div class="row mb-4">
-            <div class="col-12">
-                <div class="card saldo-total-card">
-                    <div class="card-body">
-                        <div class="row align-items-center">
-                            <div class="col-md-8">
-                                <h5 class="card-title mb-1">Saldo Total</h5>
-                                <p class="text-muted mb-0">Sumatoria de todas tus cuentas activas</p>
-                            </div>
-                            <div class="col-md-4 text-md-end">
-                                <h2 class="text-success mb-0"><?= formatMoney($saldoTotal) ?></h2>
-                            </div>
-                        </div>
-                    </div>
+        <!-- Resumen de estadísticas -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon bg-primary bg-opacity-10 text-primary">
+                    <i class="bi bi-wallet2"></i>
                 </div>
+                <div class="stat-value"><?= $totalCuentas ?></div>
+                <div class="stat-label">Total de Cuentas</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon bg-success bg-opacity-10 text-success">
+                    <i class="bi bi-cash-stack"></i>
+                </div>
+                <div class="stat-value"><?= formatMoney($saldoTotal) ?></div>
+                <div class="stat-label">Saldo Total Activo</div>
+            </div>
+            
+            <?php
+            // Calcular cuentas activas
+            $cuentasActivas = array_filter($cuentas, function($cuenta) {
+                return $cuenta['activa'];
+            });
+            $totalActivas = count($cuentasActivas);
+            ?>
+            
+            <div class="stat-card">
+                <div class="stat-icon bg-info bg-opacity-10 text-info">
+                    <i class="bi bi-check-circle"></i>
+                </div>
+                <div class="stat-value"><?= $totalActivas ?></div>
+                <div class="stat-label">Cuentas Activas</div>
+            </div>
+            
+            <div class="stat-card">
+                <div class="stat-icon bg-warning bg-opacity-10 text-warning">
+                    <i class="bi bi-pie-chart"></i>
+                </div>
+                <div class="stat-value"><?= $totalCuentas - $totalActivas ?></div>
+                <div class="stat-label">Cuentas Inactivas</div>
             </div>
         </div>
 
         <!-- Filtros -->
-        <div class="card mb-4">
-            <div class="card-body">
-                <form method="GET" action="" class="row g-3 align-items-end">
-                    <div class="col-md-4">
-                        <label for="activa" class="form-label">Estado</label>
-                        <select class="form-select" id="activa" name="activa">
-                            <option value="">Todos los estados</option>
-                            <option value="1" <?= ($filters['activa'] === 1) ? 'selected' : '' ?>>Activas</option>
-                            <option value="0" <?= ($filters['activa'] === 0) ? 'selected' : '' ?>>Inactivas</option>
-                        </select>
-                    </div>
-                    <div class="col-md-4">
-                        <button type="submit" class="btn btn-primary w-100">
-                            <i class="bi bi-funnel me-1"></i> Filtrar
-                        </button>
-                    </div>
-                    <div class="col-md-4 text-md-end">
-                        <span class="badge bg-primary badge-custom">
-                            <?= $totalCuentas ?> cuenta<?= $totalCuentas !== 1 ? 's' : '' ?>
-                        </span>
-                    </div>
-                </form>
+        <div class="filters-card">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label for="activa" class="form-label">Estado de la Cuenta</label>
+                    <select class="form-select" id="activa" name="activa" onchange="this.form.submit()">
+                        <option value="">Todas las cuentas</option>
+                        <option value="1" <?= ($filters['activa'] === 1) ? 'selected' : '' ?>>Solo activas</option>
+                        <option value="0" <?= ($filters['activa'] === 0) ? 'selected' : '' ?>>Solo inactivas</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-funnel me-1"></i> Aplicar Filtros
+                    </button>
+                </div>
+                <div class="col-md-4 text-md-end">
+                    <span class="badge bg-primary badge-custom">
+                        <?= $totalCuentas ?> cuenta<?= $totalCuentas !== 1 ? 's' : '' ?> encontrada<?= $totalCuentas !== 1 ? 's' : '' ?>
+                    </span>
+                </div>
             </div>
         </div>
 
@@ -574,8 +722,8 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
                                 <tr>
-                                    <th>Nombre</th>
-                                    <th>Saldo</th>
+                                    <th>Cuenta</th>
+                                    <th>Saldo Actual</th>
                                     <th>Estado</th>
                                     <th>Última Actualización</th>
                                     <th class="text-end">Acciones</th>
@@ -597,14 +745,15 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                                         </div>
                                     </td>
                                     <td>
-                                        <span class="fw-bold <?= $cuenta['saldo'] >= 0 ? 'text-success' : 'text-danger' ?>">
+                                        <span class="fw-bold h5 <?= $cuenta['saldo'] >= 0 ? 'text-success' : 'text-danger' ?>">
                                             <?= formatMoney($cuenta["saldo"]) ?>
                                         </span>
                                     </td>
                                     <td>
-                                        <span class="badge <?= $cuenta["activa"] ? 'bg-success' : 'bg-danger' ?> badge-custom">
+                                        <div class="account-status <?= $cuenta["activa"] ? 'bg-success bg-opacity-10 text-success' : 'bg-danger bg-opacity-10 text-danger' ?>">
+                                            <span class="status-indicator <?= $cuenta["activa"] ? 'status-active' : 'status-inactive' ?>"></span>
                                             <?= $cuenta["activa"] ? 'Activa' : 'Inactiva' ?>
-                                        </span>
+                                        </div>
                                     </td>
                                     <td>
                                         <small class="text-muted">
@@ -612,19 +761,21 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                                         </small>
                                     </td>
                                     <td class="text-end">
-                                        <div class="d-flex justify-content-end gap-2">
-                                            <button class="btn btn-sm btn-outline-primary edit-btn"
+                                        <div class="action-buttons">
+                                            <button class="btn btn-sm btn-outline-primary btn-action edit-btn"
                                                     data-bs-toggle="modal"
                                                     data-bs-target="#editAccountModal"
                                                     data-id="<?= $cuenta["id"] ?>"
                                                     data-nombre="<?= htmlspecialchars($cuenta["nombre"]) ?>"
                                                     data-saldo="<?= $cuenta["saldo"] / 100 ?>"
-                                                    data-activa="<?= $cuenta["activa"] ?>">
+                                                    data-activa="<?= $cuenta["activa"] ?>"
+                                                    title="Editar cuenta">
                                                 <i class="bi bi-pencil"></i>
                                             </button>
                                             <a href="?delete=<?= $cuenta["id"] ?>&page=<?= $page ?>&activa=<?= $filters['activa'] ?>"
-                                               class="btn btn-sm btn-outline-danger"
-                                               onclick="return confirm('¿Estás seguro de eliminar esta cuenta?\n\nEsta acción no se puede deshacer.')">
+                                               class="btn btn-sm btn-outline-danger btn-action"
+                                               onclick="return confirm('¿Estás seguro de eliminar esta cuenta?\n\nEsta acción no se puede deshacer.')"
+                                               title="Eliminar cuenta">
                                                 <i class="bi bi-trash"></i>
                                             </a>
                                         </div>
@@ -692,7 +843,7 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                             <input type="text" class="form-control" id="saldo" name="saldo" placeholder="Ej: 1.000.000" required>
                             <small class="text-muted">Ingrese el saldo inicial en guaraníes. Use puntos para separar miles.</small>
                         </div>
-                        <div class="form-check mb-3">
+                        <div class="form-check form-switch mb-3">
                             <input class="form-check-input" type="checkbox" id="activa" name="activa" checked>
                             <label class="form-check-label" for="activa">
                                 Cuenta Activa
@@ -733,7 +884,7 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                             <input type="text" class="form-control" id="edit_saldo" name="saldo" required>
                             <small class="text-muted">Saldo actual en guaraníes. Use puntos para separar miles.</small>
                         </div>
-                        <div class="form-check mb-3">
+                        <div class="form-check form-switch mb-3">
                             <input class="form-check-input" type="checkbox" id="edit_activa" name="activa">
                             <label class="form-check-label" for="edit_activa">
                                 Cuenta Activa
@@ -803,6 +954,11 @@ $saldoTotal = $accountRepo->getTotalBalance($usuario_id);
                         saldoInput.value = saldoInput.value.replace(/\./g, '');
                     }
                 });
+            });
+
+            // Auto-submit del filtro cuando cambia
+            document.getElementById('activa').addEventListener('change', function() {
+                this.form.submit();
             });
         });
     </script>
