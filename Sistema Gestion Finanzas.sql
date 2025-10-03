@@ -2,10 +2,10 @@
 -- version 5.2.1
 -- https://www.phpmyadmin.net/
 --
--- Host: 127.0.0.1
--- Generation Time: Sep 28, 2025 at 04:09 PM
--- Server version: 10.4.32-MariaDB
--- PHP Version: 8.2.12
+-- Servidor: 127.0.0.1
+-- Tiempo de generación: 04-10-2025 a las 00:40:08
+-- Versión del servidor: 10.4.32-MariaDB
+-- Versión de PHP: 8.2.12
 
 SET SQL_MODE = "NO_AUTO_VALUE_ON_ZERO";
 START TRANSACTION;
@@ -18,13 +18,13 @@ SET time_zone = "+00:00";
 /*!40101 SET NAMES utf8mb4 */;
 
 --
--- Database: `finzen`
+-- Base de datos: `finzen`
 --
 
 -- --------------------------------------------------------
 
 --
--- Table structure for table `categorias`
+-- Estructura de tabla para la tabla `categorias`
 --
 
 CREATE TABLE `categorias` (
@@ -39,14 +39,19 @@ CREATE TABLE `categorias` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci COMMENT='Categorías para clasificar transacciones';
 
 --
--- Dumping data for table `categorias`
+-- Volcado de datos para la tabla `categorias`
 --
 
 INSERT INTO `categorias` (`id`, `usuario_id`, `nombre`, `tipo`, `icono`, `color`, `creado_en`, `actualizado_en`) VALUES
-(2, 1, 'test', 'ingreso', 'fa-money-bill-wave', '#8AC24A', '2025-09-15 01:07:00', '2025-09-15 01:07:00');
+(2, 1, 'test', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-09-15 01:07:00', '2025-09-28 17:38:00'),
+(3, 1, 'transporte', 'gasto', 'bi-car-front', '#FF6384', '2025-09-28 16:35:58', '2025-09-28 17:37:48'),
+(4, 1, 'servicios', 'gasto', 'bi-phone', '#FF6384', '2025-09-29 18:03:46', '2025-09-30 02:44:53'),
+(5, 3, 'Salario', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-09-30 04:11:57', '2025-09-30 04:11:57'),
+(6, 1, 'test3', 'ingreso', 'bi-cash-coin', '#FF6384', '2025-10-01 23:02:40', '2025-10-01 23:02:40'),
+(7, 1, 'Alquiler', 'gasto', 'bi-house', '#9966FF', '2025-10-01 23:17:59', '2025-10-01 23:17:59');
 
 --
--- Triggers `categorias`
+-- Disparadores `categorias`
 --
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_categorias` BEFORE UPDATE ON `categorias` FOR EACH ROW BEGIN
@@ -73,83 +78,7 @@ DELIMITER ;
 -- --------------------------------------------------------
 
 --
--- Table structure for table `cuentas`
---
-
-CREATE TABLE `cuentas` (
-  `id` int(10) UNSIGNED NOT NULL,
-  `usuario_id` int(10) UNSIGNED NOT NULL,
-  `nombre` varchar(100) NOT NULL,
-  `saldo` bigint(20) NOT NULL DEFAULT 0 COMMENT 'Valor en centavos/unidad mínima',
-  `moneda` char(3) DEFAULT 'USD',
-  `activa` tinyint(1) DEFAULT 1,
-  `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
-  `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci COMMENT='Cuentas financieras de usuarios';
-
---
--- Dumping data for table `cuentas`
---
-
-INSERT INTO `cuentas` (`id`, `usuario_id`, `nombre`, `saldo`, `moneda`, `activa`, `creado_en`, `actualizado_en`) VALUES
-(1, 1, 'test', 12000, 'PYG', 1, '2025-09-15 00:53:33', '2025-09-15 01:16:23');
-
---
--- Triggers `cuentas`
---
-DELIMITER $$
-CREATE TRIGGER `trg_actualizar_timestamp_cuentas` BEFORE UPDATE ON `cuentas` FOR EACH ROW BEGIN
-    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
-END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_desactivar_cuenta_saldo_negativo` AFTER UPDATE ON `cuentas` FOR EACH ROW BEGIN
-    IF NEW.saldo < 0 AND NEW.activa = TRUE THEN
-        UPDATE cuentas 
-        SET activa = FALSE,
-            actualizado_en = CURRENT_TIMESTAMP
-        WHERE id = NEW.id;
-    END IF;
-END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_nombre_cuenta_default` BEFORE INSERT ON `cuentas` FOR EACH ROW BEGIN
-    IF NEW.nombre IS NULL OR NEW.nombre = '' THEN
-        SET NEW.nombre = CONCAT('Cuenta ', DATE_FORMAT(NOW(), '%Y%m%d'));
-    END IF;
-END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_prevenir_eliminar_cuenta_con_transacciones` BEFORE DELETE ON `cuentas` FOR EACH ROW BEGIN
-    DECLARE transacciones_count INT;
-    
-    SELECT COUNT(*) INTO transacciones_count 
-    FROM transacciones 
-    WHERE cuenta_id = OLD.id;
-    
-    IF transacciones_count > 0 THEN
-        SIGNAL SQLSTATE '45000' 
-        SET MESSAGE_TEXT = 'No se puede eliminar una cuenta con transacciones asociadas';
-    END IF;
-END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_reactivar_cuenta_saldo_positivo` BEFORE UPDATE ON `cuentas` FOR EACH ROW BEGIN
-    IF NEW.saldo >= 0 AND OLD.saldo < 0 AND NEW.activa = FALSE THEN
-        SET NEW.activa = TRUE;
-    END IF;
-END
-$$
-DELIMITER ;
-
--- --------------------------------------------------------
-
---
--- Table structure for table `presupuestos`
+-- Estructura de tabla para la tabla `presupuestos`
 --
 
 CREATE TABLE `presupuestos` (
@@ -166,7 +95,15 @@ CREATE TABLE `presupuestos` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
--- Triggers `presupuestos`
+-- Volcado de datos para la tabla `presupuestos`
+--
+
+INSERT INTO `presupuestos` (`id`, `usuario_id`, `categoria_id`, `monto`, `periodo`, `fecha_inicio`, `fecha_fin`, `notificacion`, `creado_en`, `actualizado_en`) VALUES
+(6, 1, 3, 200000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:04:23', '2025-09-30 03:14:10'),
+(7, 1, 4, 500000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:37:08', '2025-09-30 00:37:08');
+
+--
+-- Disparadores `presupuestos`
 --
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_presupuestos` BEFORE UPDATE ON `presupuestos` FOR EACH ROW BEGIN
@@ -196,7 +133,7 @@ DELIMITER ;
 -- --------------------------------------------------------
 
 --
--- Table structure for table `roles`
+-- Estructura de tabla para la tabla `roles`
 --
 
 CREATE TABLE `roles` (
@@ -207,7 +144,7 @@ CREATE TABLE `roles` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci COMMENT='Roles de usuarios en el sistema';
 
 --
--- Dumping data for table `roles`
+-- Volcado de datos para la tabla `roles`
 --
 
 INSERT INTO `roles` (`id`, `nombre`, `creado_en`, `actualizado_en`) VALUES
@@ -217,12 +154,12 @@ INSERT INTO `roles` (`id`, `nombre`, `creado_en`, `actualizado_en`) VALUES
 -- --------------------------------------------------------
 
 --
--- Table structure for table `transacciones`
+-- Estructura de tabla para la tabla `transacciones`
 --
 
 CREATE TABLE `transacciones` (
   `id` bigint(20) UNSIGNED NOT NULL,
-  `cuenta_id` int(10) UNSIGNED NOT NULL,
+  `usuario_id` int(10) UNSIGNED NOT NULL,
   `categoria_id` int(10) UNSIGNED NOT NULL,
   `monto` bigint(20) NOT NULL COMMENT 'Valor en centavos/unidad mínima',
   `descripcion` varchar(255) DEFAULT NULL,
@@ -233,35 +170,97 @@ CREATE TABLE `transacciones` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
--- Dumping data for table `transacciones`
+-- Volcado de datos para la tabla `transacciones`
 --
 
-INSERT INTO `transacciones` (`id`, `cuenta_id`, `categoria_id`, `monto`, `descripcion`, `fecha`, `recurrente`, `creado_en`, `actualizado_en`) VALUES
-(1, 1, 2, 1000, 'una prueba', '2025-09-15', 0, '2025-09-15 01:16:23', '2025-09-15 01:16:23');
+INSERT INTO `transacciones` (`id`, `usuario_id`, `categoria_id`, `monto`, `descripcion`, `fecha`, `recurrente`, `creado_en`, `actualizado_en`) VALUES
+(1, 0, 2, 1000, 'una prueba', '2025-09-15', 0, '2025-09-15 01:16:23', '2025-09-15 01:16:23'),
+(2, 0, 3, 10000, '', '2025-09-28', 0, '2025-09-28 16:36:17', '2025-09-28 16:36:17'),
+(3, 0, 2, 100000, '', '2025-09-28', 0, '2025-09-28 16:42:25', '2025-09-28 16:42:25'),
+(4, 0, 3, 100000, '', '2025-09-28', 0, '2025-09-28 16:42:54', '2025-09-28 16:42:54'),
+(5, 0, 3, 100000, 'Testing', '2025-09-30', 0, '2025-09-30 00:38:20', '2025-09-30 00:38:20'),
+(6, 0, 5, 1000000, 'Ingresos', '2025-09-30', 0, '2025-09-30 04:12:43', '2025-09-30 04:12:43'),
+(7, 0, 4, 100000, 'un gasto', '2025-10-02', 0, '2025-10-01 23:11:12', '2025-10-01 23:11:12'),
+(8, 0, 7, 100000000, 'pago alquiler agosto', '2025-10-02', 0, '2025-10-01 23:20:07', '2025-10-01 23:20:07'),
+(11, 0, 4, 300000000, 'serv', '2025-10-02', 0, '2025-10-01 23:24:56', '2025-10-01 23:24:56');
 
 --
--- Triggers `transacciones`
+-- Disparadores `transacciones`
 --
 DELIMITER $$
-CREATE TRIGGER `trg_actualizar_saldo_insert` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
+CREATE TRIGGER `trg_actualizar_saldo_usuario_delete` AFTER DELETE ON `transacciones` FOR EACH ROW BEGIN
     DECLARE tipo_categoria ENUM('ingreso','gasto');
     
-    -- Obtener el tipo de categoría
-    SELECT tipo INTO tipo_categoria 
-    FROM categorias 
-    WHERE id = NEW.categoria_id;
+    SELECT `tipo` INTO tipo_categoria 
+    FROM `categorias` 
+    WHERE `id` = OLD.`categoria_id`;
     
-    -- Actualizar saldo según el tipo de transacción
     IF tipo_categoria = 'ingreso' THEN
-        UPDATE cuentas 
-        SET saldo = saldo + NEW.monto,
-            actualizado_en = CURRENT_TIMESTAMP
-        WHERE id = NEW.cuenta_id;
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` - OLD.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = OLD.`usuario_id`;
     ELSE
-        UPDATE cuentas 
-        SET saldo = saldo - NEW.monto,
-            actualizado_en = CURRENT_TIMESTAMP
-        WHERE id = NEW.cuenta_id;
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` + OLD.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = OLD.`usuario_id`;
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_saldo_usuario_insert` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE tipo_categoria ENUM('ingreso','gasto');
+    
+    SELECT `tipo` INTO tipo_categoria 
+    FROM `categorias` 
+    WHERE `id` = NEW.`categoria_id`;
+    
+    IF tipo_categoria = 'ingreso' THEN
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` + NEW.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = NEW.`usuario_id`;
+    ELSE
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` - NEW.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = NEW.`usuario_id`;
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_saldo_usuario_update` AFTER UPDATE ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE tipo_categoria_old ENUM('ingreso','gasto');
+    DECLARE tipo_categoria_new ENUM('ingreso','gasto');
+    
+    SELECT `tipo` INTO tipo_categoria_old FROM `categorias` WHERE `id` = OLD.`categoria_id`;
+    SELECT `tipo` INTO tipo_categoria_new FROM `categorias` WHERE `id` = NEW.`categoria_id`;
+    
+    -- Revertir transacción anterior
+    IF tipo_categoria_old = 'ingreso' THEN
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` - OLD.`monto`
+        WHERE `id` = OLD.`usuario_id`;
+    ELSE
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` + OLD.`monto`
+        WHERE `id` = OLD.`usuario_id`;
+    END IF;
+    
+    -- Aplicar nueva transacción
+    IF tipo_categoria_new = 'ingreso' THEN
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` + NEW.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = NEW.`usuario_id`;
+    ELSE
+        UPDATE `usuarios` 
+        SET `saldo` = `saldo` - NEW.`monto`,
+            `actualizado_en` = CURRENT_TIMESTAMP
+        WHERE `id` = NEW.`usuario_id`;
     END IF;
 END
 $$
@@ -272,12 +271,6 @@ CREATE TRIGGER `trg_limitar_descripcion` BEFORE INSERT ON `transacciones` FOR EA
         SET NEW.descripcion = CONCAT(SUBSTRING(NEW.descripcion, 1, 252), '...');
     END IF;
 END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_transaccion_delete` AFTER DELETE ON `transacciones` FOR EACH ROW UPDATE cuentas
-SET saldo = saldo - OLD.monto
-WHERE id = OLD.cuenta_id
 $$
 DELIMITER ;
 DELIMITER $$
@@ -293,7 +286,7 @@ DELIMITER ;
 -- --------------------------------------------------------
 
 --
--- Table structure for table `usuarios`
+-- Estructura de tabla para la tabla `usuarios`
 --
 
 CREATE TABLE `usuarios` (
@@ -302,21 +295,24 @@ CREATE TABLE `usuarios` (
   `correo_electronico` varchar(150) NOT NULL,
   `hash_contraseña` varchar(255) NOT NULL,
   `rol_id` tinyint(3) UNSIGNED NOT NULL DEFAULT 2,
+  `saldo` bigint(20) NOT NULL DEFAULT 0 COMMENT 'Valor en centavos/unidad mínima',
+  `moneda` char(3) DEFAULT 'PYG',
   `activo` tinyint(1) DEFAULT 1,
   `creado_en` timestamp NOT NULL DEFAULT current_timestamp(),
   `actualizado_en` timestamp NULL DEFAULT NULL ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_spanish_ci;
 
 --
--- Dumping data for table `usuarios`
+-- Volcado de datos para la tabla `usuarios`
 --
 
-INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `activo`, `creado_en`, `actualizado_en`) VALUES
-(1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 1, '2025-09-15 01:18:33', '2025-09-15 02:09:11'),
-(2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 2, 1, '2025-09-15 02:07:33', NULL);
+INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `saldo`, `moneda`, `activo`, `creado_en`, `actualizado_en`) VALUES
+(1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 0, 'PYG', 1, '2025-09-15 01:18:33', '2025-10-03 22:30:45'),
+(2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 1, 0, 'PYG', 1, '2025-09-15 02:07:33', '2025-10-03 22:30:45'),
+(3, 'demo', 'demoemail@gmail.com', '$2y$10$1n9MPXZnFKf.kNBZaC28repW//jfwnmiH.ouemmKAcFRbXMZv2aL2', 2, 0, 'PYG', 1, '2025-09-29 17:05:41', '2025-10-03 22:30:45');
 
 --
--- Triggers `usuarios`
+-- Disparadores `usuarios`
 --
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_usuarios` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
@@ -335,11 +331,11 @@ $$
 DELIMITER ;
 
 --
--- Indexes for dumped tables
+-- Índices para tablas volcadas
 --
 
 --
--- Indexes for table `categorias`
+-- Indices de la tabla `categorias`
 --
 ALTER TABLE `categorias`
   ADD PRIMARY KEY (`id`),
@@ -347,15 +343,7 @@ ALTER TABLE `categorias`
   ADD KEY `idx_usuario_tipo_categoria` (`usuario_id`,`tipo`);
 
 --
--- Indexes for table `cuentas`
---
-ALTER TABLE `cuentas`
-  ADD PRIMARY KEY (`id`),
-  ADD UNIQUE KEY `uq_usuario_nombre_cuenta` (`usuario_id`,`nombre`),
-  ADD KEY `idx_cuenta_usuario` (`usuario_id`);
-
---
--- Indexes for table `presupuestos`
+-- Indices de la tabla `presupuestos`
 --
 ALTER TABLE `presupuestos`
   ADD PRIMARY KEY (`id`),
@@ -363,23 +351,23 @@ ALTER TABLE `presupuestos`
   ADD KEY `fk_presupuesto_categoria` (`categoria_id`);
 
 --
--- Indexes for table `roles`
+-- Indices de la tabla `roles`
 --
 ALTER TABLE `roles`
   ADD PRIMARY KEY (`id`),
   ADD UNIQUE KEY `nombre` (`nombre`);
 
 --
--- Indexes for table `transacciones`
+-- Indices de la tabla `transacciones`
 --
 ALTER TABLE `transacciones`
   ADD PRIMARY KEY (`id`),
-  ADD KEY `idx_transacciones_fecha` (`cuenta_id`,`fecha`),
+  ADD KEY `idx_transacciones_fecha` (`fecha`),
   ADD KEY `idx_transacciones_categoria` (`categoria_id`),
-  ADD KEY `idx_transacciones_cuenta_fecha` (`cuenta_id`,`fecha`);
+  ADD KEY `idx_transacciones_cuenta_fecha` (`fecha`);
 
 --
--- Indexes for table `usuarios`
+-- Indices de la tabla `usuarios`
 --
 ALTER TABLE `usuarios`
   ADD PRIMARY KEY (`id`),
@@ -388,77 +376,57 @@ ALTER TABLE `usuarios`
   ADD KEY `idx_usuario_rol` (`rol_id`);
 
 --
--- AUTO_INCREMENT for dumped tables
+-- AUTO_INCREMENT de las tablas volcadas
 --
 
 --
--- AUTO_INCREMENT for table `categorias`
+-- AUTO_INCREMENT de la tabla `categorias`
 --
 ALTER TABLE `categorias`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
--- AUTO_INCREMENT for table `cuentas`
---
-ALTER TABLE `cuentas`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
-
---
--- AUTO_INCREMENT for table `presupuestos`
+-- AUTO_INCREMENT de la tabla `presupuestos`
 --
 ALTER TABLE `presupuestos`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
--- AUTO_INCREMENT for table `roles`
+-- AUTO_INCREMENT de la tabla `roles`
 --
 ALTER TABLE `roles`
   MODIFY `id` tinyint(3) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
 
 --
--- AUTO_INCREMENT for table `transacciones`
+-- AUTO_INCREMENT de la tabla `transacciones`
 --
 ALTER TABLE `transacciones`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=2;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
 
 --
--- AUTO_INCREMENT for table `usuarios`
+-- AUTO_INCREMENT de la tabla `usuarios`
 --
 ALTER TABLE `usuarios`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=3;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=4;
 
 --
--- Constraints for dumped tables
+-- Restricciones para tablas volcadas
 --
 
 --
--- Constraints for table `categorias`
---
-ALTER TABLE `categorias`
-  ADD CONSTRAINT `fk_categoria_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
---
--- Constraints for table `cuentas`
---
-ALTER TABLE `cuentas`
-  ADD CONSTRAINT `fk_cuenta_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
-
---
--- Constraints for table `presupuestos`
+-- Filtros para la tabla `presupuestos`
 --
 ALTER TABLE `presupuestos`
-  ADD CONSTRAINT `fk_presupuesto_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_presupuesto_usuario` FOREIGN KEY (`usuario_id`) REFERENCES `usuarios` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT `fk_presupuesto_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
 
 --
--- Constraints for table `transacciones`
+-- Filtros para la tabla `transacciones`
 --
 ALTER TABLE `transacciones`
-  ADD CONSTRAINT `fk_transaccion_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON UPDATE CASCADE,
-  ADD CONSTRAINT `fk_transaccion_cuenta` FOREIGN KEY (`cuenta_id`) REFERENCES `cuentas` (`id`) ON DELETE CASCADE ON UPDATE CASCADE;
+  ADD CONSTRAINT `fk_transaccion_categoria` FOREIGN KEY (`categoria_id`) REFERENCES `categorias` (`id`) ON UPDATE CASCADE;
 
 --
--- Constraints for table `usuarios`
+-- Filtros para la tabla `usuarios`
 --
 ALTER TABLE `usuarios`
   ADD CONSTRAINT `fk_usuario_rol` FOREIGN KEY (`rol_id`) REFERENCES `roles` (`id`) ON UPDATE CASCADE;
