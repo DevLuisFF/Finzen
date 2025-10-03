@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 04-10-2025 a las 01:06:33
+-- Tiempo de generación: 04-10-2025 a las 01:17:31
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -138,11 +138,52 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_auto_limpiar_presupuestos_expirados` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    -- Eliminar presupuestos expirados del mismo usuario y categoría
+    DELETE FROM presupuestos 
+    WHERE usuario_id = NEW.usuario_id 
+    AND categoria_id = NEW.categoria_id
+    AND fecha_fin IS NOT NULL 
+    AND fecha_fin < CURDATE();
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_establecer_fecha_fin_presupuesto` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
     IF NEW.periodo = 'mensual' AND NEW.fecha_fin IS NULL THEN
         SET NEW.fecha_fin = DATE_ADD(NEW.fecha_inicio, INTERVAL 1 MONTH);
     ELSEIF NEW.periodo = 'anual' AND NEW.fecha_fin IS NULL THEN
         SET NEW.fecha_fin = DATE_ADD(NEW.fecha_inicio, INTERVAL 1 YEAR);
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_actualizacion_presupuesto` BEFORE UPDATE ON `presupuestos` FOR EACH ROW BEGIN
+    DECLARE gasto_actual BIGINT;
+    
+    -- Si se reduce el presupuesto, verificar que no sea menor al gasto actual
+    IF NEW.monto < OLD.monto THEN
+        -- Calcular gasto actual en el período
+        SELECT COALESCE(SUM(t.monto), 0) INTO gasto_actual
+        FROM transacciones t
+        INNER JOIN categorias c ON t.categoria_id = c.id
+        WHERE t.usuario_id = NEW.usuario_id
+        AND t.categoria_id = NEW.categoria_id
+        AND c.tipo = 'gasto'
+        AND t.fecha BETWEEN NEW.fecha_inicio AND 
+            COALESCE(NEW.fecha_fin, DATE_ADD(NEW.fecha_inicio, INTERVAL 1 MONTH));
+        
+        IF gasto_actual > NEW.monto THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'No se puede reducir el presupuesto por debajo del gasto actual registrado';
+        END IF;
+    END IF;
+    
+    -- Prevenir cambios de categoría en presupuestos existentes
+    IF OLD.categoria_id != NEW.categoria_id THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se puede cambiar la categoría de un presupuesto existente';
     END IF;
 END
 $$
@@ -424,6 +465,53 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_monitor_ingresos_anomalos` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE categoria_tipo ENUM('ingreso','gasto');
+    DECLARE promedio_ingresos_mensual BIGINT;
+    DECLARE total_ingresos_mes BIGINT;
+    
+    SELECT tipo INTO categoria_tipo FROM categorias WHERE id = NEW.categoria_id;
+    
+    IF categoria_tipo = 'ingreso' THEN
+        -- Calcular promedio de ingresos de los últimos 3 meses
+        SELECT COALESCE(AVG(monto), 0) INTO promedio_ingresos_mensual
+        FROM transacciones t
+        INNER JOIN categorias c ON t.categoria_id = c.id
+        WHERE t.usuario_id = NEW.usuario_id
+        AND c.tipo = 'ingreso'
+        AND t.fecha BETWEEN DATE_SUB(NEW.fecha, INTERVAL 3 MONTH) AND NEW.fecha;
+        
+        -- Alertar si el ingreso es 5 veces mayor al promedio
+        IF promedio_ingresos_mensual > 0 AND NEW.monto > (promedio_ingresos_mensual * 5) THEN
+            -- Podrías implementar notificación o logging aquí
+            SET @ingreso_anomalo = 'Ingreso inusualmente alto detectado';
+        END IF;
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_prevenir_transacciones_duplicadas` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE transaccion_duplicada INT;
+    
+    -- Verificar transacción similar en los últimos 5 minutos
+    SELECT COUNT(*) INTO transaccion_duplicada
+    FROM transacciones 
+    WHERE usuario_id = NEW.usuario_id 
+    AND categoria_id = NEW.categoria_id 
+    AND monto = NEW.monto 
+    AND fecha = NEW.fecha
+    AND descripcion = NEW.descripcion
+    AND creado_en >= DATE_SUB(NOW(), INTERVAL 5 MINUTE);
+    
+    IF transaccion_duplicada > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Transacción duplicada detectada en los últimos 5 minutos';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_validar_actualizacion_transaccion` BEFORE UPDATE ON `transacciones` FOR EACH ROW BEGIN
     -- Prevenir cambios de usuario_id en transacciones existentes
     IF OLD.usuario_id != NEW.usuario_id THEN
@@ -435,6 +523,22 @@ CREATE TRIGGER `trg_validar_actualizacion_transaccion` BEFORE UPDATE ON `transac
     IF NEW.fecha > CURDATE() THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'La fecha de la transacción no puede ser futura';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_fecha_transaccion` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    -- No permitir transacciones con más de 1 año de antigüedad
+    IF NEW.fecha < DATE_SUB(CURDATE(), INTERVAL 1 YEAR) THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se pueden registrar transacciones con más de 1 año de antigüedad';
+    END IF;
+    
+    -- No permitir transacciones futuras (más de 7 días)
+    IF NEW.fecha > DATE_ADD(CURDATE(), INTERVAL 7 DAY) THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se pueden registrar transacciones con más de 7 días de anticipación';
     END IF;
 END
 $$
@@ -513,6 +617,58 @@ CREATE TRIGGER `trg_validar_usuario_categoria_transaccion` BEFORE INSERT ON `tra
     IF categoria_usuario_id != NEW.usuario_id THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'La categoría no pertenece al usuario';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_verificar_presupuesto_al_gastar` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE presupuesto_mensual BIGINT;
+    DECLARE gasto_mensual_actual BIGINT;
+    DECLARE porcentaje_uso DECIMAL(5,2);
+    DECLARE categoria_tipo ENUM('ingreso','gasto');
+    
+    -- Solo verificar para gastos
+    SELECT tipo INTO categoria_tipo FROM categorias WHERE id = NEW.categoria_id;
+    
+    IF categoria_tipo = 'gasto' THEN
+        -- Obtener presupuesto mensual para esta categoría
+        SELECT COALESCE(SUM(monto), 0) INTO presupuesto_mensual
+        FROM presupuestos 
+        WHERE usuario_id = NEW.usuario_id 
+        AND categoria_id = NEW.categoria_id
+        AND periodo = 'mensual'
+        AND fecha_inicio <= NEW.fecha
+        AND (fecha_fin IS NULL OR fecha_fin >= NEW.fecha);
+        
+        -- Si existe presupuesto, verificar uso
+        IF presupuesto_mensual > 0 THEN
+            -- Calcular gasto mensual actual
+            SELECT COALESCE(SUM(monto), 0) INTO gasto_mensual_actual
+            FROM transacciones t
+            INNER JOIN categorias c ON t.categoria_id = c.id
+            WHERE t.usuario_id = NEW.usuario_id
+            AND t.categoria_id = NEW.categoria_id
+            AND c.tipo = 'gasto'
+            AND YEAR(t.fecha) = YEAR(NEW.fecha)
+            AND MONTH(t.fecha) = MONTH(NEW.fecha);
+            
+            -- Calcular nuevo gasto total
+            SET gasto_mensual_actual = gasto_mensual_actual + NEW.monto;
+            SET porcentaje_uso = (gasto_mensual_actual / presupuesto_mensual) * 100;
+            
+            -- Prevenir si excede el presupuesto
+            IF gasto_mensual_actual > presupuesto_mensual THEN
+                SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'Esta transacción excede el presupuesto mensual asignado para esta categoría';
+            -- Advertencia si está cerca del límite (80%)
+            ELSEIF porcentaje_uso > 80 THEN
+                -- Solo advertencia, no bloquea la transacción
+                -- Podrías implementar logging aquí
+                SET @presupuesto_warning = CONCAT('Advertencia: Has usado el ', 
+                    ROUND(porcentaje_uso), '% de tu presupuesto mensual para esta categoría');
+            END IF;
+        END IF;
     END IF;
 END
 $$
