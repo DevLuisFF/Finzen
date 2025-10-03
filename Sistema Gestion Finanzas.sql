@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 04-10-2025 a las 00:57:14
+-- Tiempo de generación: 04-10-2025 a las 01:06:33
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -188,6 +188,35 @@ CREATE TRIGGER `trg_validar_presupuesto_usuario_categoria` BEFORE INSERT ON `pre
 END
 $$
 DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_presupuesto_vs_saldo` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    DECLARE saldo_actual BIGINT;
+    DECLARE presupuesto_total BIGINT;
+    
+    -- Obtener saldo actual del usuario
+    SELECT `saldo` INTO saldo_actual 
+    FROM `usuarios` 
+    WHERE `id` = NEW.`usuario_id`;
+    
+    -- Calcular presupuesto total mensual actual del usuario
+    SELECT COALESCE(SUM(monto), 0) INTO presupuesto_total
+    FROM presupuestos 
+    WHERE usuario_id = NEW.usuario_id 
+    AND periodo = 'mensual'
+    AND (fecha_fin IS NULL OR fecha_fin >= CURDATE());
+    
+    -- Sumar el nuevo presupuesto
+    SET presupuesto_total = presupuesto_total + NEW.monto;
+    
+    -- Validar que el presupuesto total no exceda significativamente el saldo
+    -- (Ajusta el porcentaje según tus necesidades)
+    IF presupuesto_total > saldo_actual * 2 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El presupuesto total excede significativamente su saldo actual';
+    END IF;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -319,30 +348,35 @@ DELIMITER $$
 CREATE TRIGGER `trg_actualizar_saldo_usuario_update` AFTER UPDATE ON `transacciones` FOR EACH ROW BEGIN
     DECLARE tipo_categoria_old ENUM('ingreso','gasto');
     DECLARE tipo_categoria_new ENUM('ingreso','gasto');
+    DECLARE saldo_actual BIGINT;
     
-    SELECT `tipo` INTO tipo_categoria_old FROM `categorias` WHERE `id` = OLD.`categoria_id`;
-    SELECT `tipo` INTO tipo_categoria_new FROM `categorias` WHERE `id` = NEW.`categoria_id`;
-    
-    -- Revertir transacción anterior
-    IF tipo_categoria_old = 'ingreso' THEN
+    -- Solo procesar si hay cambios relevantes
+    IF OLD.monto != NEW.monto OR OLD.categoria_id != NEW.categoria_id OR OLD.usuario_id != NEW.usuario_id THEN
+        
+        -- Obtener tipos de categorías
+        SELECT `tipo` INTO tipo_categoria_old FROM `categorias` WHERE `id` = OLD.`categoria_id`;
+        SELECT `tipo` INTO tipo_categoria_new FROM `categorias` WHERE `id` = NEW.`categoria_id`;
+        
+        -- Obtener saldo actual
+        SELECT `saldo` INTO saldo_actual FROM `usuarios` WHERE `id` = OLD.`usuario_id`;
+        
+        -- Revertir transacción anterior
+        IF tipo_categoria_old = 'ingreso' THEN
+            SET saldo_actual = saldo_actual - OLD.monto;
+        ELSE
+            SET saldo_actual = saldo_actual + OLD.monto;
+        END IF;
+        
+        -- Aplicar nueva transacción
+        IF tipo_categoria_new = 'ingreso' THEN
+            SET saldo_actual = saldo_actual + NEW.monto;
+        ELSE
+            SET saldo_actual = saldo_actual - NEW.monto;
+        END IF;
+        
+        -- Actualizar saldo del usuario
         UPDATE `usuarios` 
-        SET `saldo` = `saldo` - OLD.`monto`
-        WHERE `id` = OLD.`usuario_id`;
-    ELSE
-        UPDATE `usuarios` 
-        SET `saldo` = `saldo` + OLD.`monto`
-        WHERE `id` = OLD.`usuario_id`;
-    END IF;
-    
-    -- Aplicar nueva transacción
-    IF tipo_categoria_new = 'ingreso' THEN
-        UPDATE `usuarios` 
-        SET `saldo` = `saldo` + NEW.`monto`,
-            `actualizado_en` = CURRENT_TIMESTAMP
-        WHERE `id` = NEW.`usuario_id`;
-    ELSE
-        UPDATE `usuarios` 
-        SET `saldo` = `saldo` - NEW.`monto`,
+        SET `saldo` = saldo_actual,
             `actualizado_en` = CURRENT_TIMESTAMP
         WHERE `id` = NEW.`usuario_id`;
     END IF;
@@ -353,6 +387,38 @@ DELIMITER $$
 CREATE TRIGGER `trg_limitar_descripcion` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
     IF LENGTH(NEW.descripcion) > 255 THEN
         SET NEW.descripcion = CONCAT(SUBSTRING(NEW.descripcion, 1, 252), '...');
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_monitor_gastos_elevados` AFTER INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE tipo_categoria ENUM('ingreso','gasto');
+    DECLARE saldo_actual BIGINT;
+    DECLARE porcentaje_gasto DECIMAL(5,2);
+    
+    SELECT `tipo` INTO tipo_categoria 
+    FROM `categorias` 
+    WHERE `id` = NEW.`categoria_id`;
+    
+    IF tipo_categoria = 'gasto' THEN
+        -- Obtener saldo actual después de la transacción
+        SELECT `saldo` INTO saldo_actual 
+        FROM `usuarios` 
+        WHERE `id` = NEW.`usuario_id`;
+        
+        -- Calcular porcentaje del gasto respecto al saldo anterior
+        SET porcentaje_gasto = (NEW.monto / (saldo_actual + NEW.monto)) * 100;
+        
+        -- Alertar si el gasto representa más del 50% del saldo anterior
+        IF porcentaje_gasto > 50 THEN
+            -- Aquí podrías implementar notificaciones o logging
+            -- Por ahora solo prevenimos gastos extremadamente altos
+            IF porcentaje_gasto > 90 THEN
+                SIGNAL SQLSTATE '45000' 
+                SET MESSAGE_TEXT = 'Gasto demasiado elevado en relación a su saldo';
+            END IF;
+        END IF;
     END IF;
 END
 $$
@@ -378,6 +444,75 @@ CREATE TRIGGER `trg_validar_monto_positivo` BEFORE INSERT ON `transacciones` FOR
     IF NEW.monto <= 0 THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'El monto debe ser mayor a 0';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_saldo_actualizacion_gasto` BEFORE UPDATE ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE tipo_categoria_old ENUM('ingreso','gasto');
+    DECLARE tipo_categoria_new ENUM('ingreso','gasto');
+    DECLARE saldo_actual BIGINT;
+    DECLARE saldo_temporal BIGINT;
+    
+    -- Obtener tipos de categorías
+    SELECT `tipo` INTO tipo_categoria_old FROM `categorias` WHERE `id` = OLD.`categoria_id`;
+    SELECT `tipo` INTO tipo_categoria_new FROM `categorias` WHERE `id` = NEW.`categoria_id`;
+    
+    -- Obtener saldo actual
+    SELECT `saldo` INTO saldo_actual FROM `usuarios` WHERE `id` = NEW.`usuario_id`;
+    
+    -- Calcular saldo temporal después de revertir la transacción anterior
+    IF tipo_categoria_old = 'ingreso' THEN
+        SET saldo_temporal = saldo_actual - OLD.monto;
+    ELSE
+        SET saldo_temporal = saldo_actual + OLD.monto;
+    END IF;
+    
+    -- Validar que la nueva transacción no exceda el saldo
+    IF tipo_categoria_new = 'gasto' AND NEW.monto > saldo_temporal THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Saldo insuficiente para actualizar a este gasto';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_saldo_antes_gasto` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE tipo_categoria ENUM('ingreso','gasto');
+    DECLARE saldo_actual BIGINT;
+    
+    -- Obtener el tipo de categoría
+    SELECT `tipo` INTO tipo_categoria 
+    FROM `categorias` 
+    WHERE `id` = NEW.`categoria_id`;
+    
+    -- Obtener saldo actual del usuario
+    SELECT `saldo` INTO saldo_actual 
+    FROM `usuarios` 
+    WHERE `id` = NEW.`usuario_id`;
+    
+    -- Validar que no se exceda el saldo en gastos
+    IF tipo_categoria = 'gasto' AND NEW.monto > saldo_actual THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Saldo insuficiente para realizar este gasto';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_usuario_categoria_transaccion` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
+    DECLARE categoria_usuario_id INT;
+    DECLARE categoria_tipo ENUM('ingreso','gasto');
+    
+    -- Verificar que la categoría pertenece al usuario y obtener su tipo
+    SELECT usuario_id, tipo INTO categoria_usuario_id, categoria_tipo
+    FROM categorias 
+    WHERE id = NEW.categoria_id;
+    
+    IF categoria_usuario_id != NEW.usuario_id THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'La categoría no pertenece al usuario';
     END IF;
 END
 $$
@@ -415,6 +550,16 @@ INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_cont
 -- Disparadores `usuarios`
 --
 DELIMITER $$
+CREATE TRIGGER `trg_actualizar_saldo_inicial` AFTER UPDATE ON `usuarios` FOR EACH ROW BEGIN
+    -- Si el saldo se actualiza manualmente, verificar consistencia con transacciones
+    IF OLD.saldo != NEW.saldo AND NEW.saldo < 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El saldo no puede ser negativo';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_usuarios` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
     SET NEW.actualizado_en = CURRENT_TIMESTAMP;
 END
@@ -434,6 +579,29 @@ CREATE TRIGGER `trg_validar_email` BEFORE INSERT ON `usuarios` FOR EACH ROW BEGI
     IF NEW.correo_electronico NOT LIKE '%_@__%.__%' THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'Formato de email inválido';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_transferencia_saldo` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
+    DECLARE total_gastos_pendientes BIGINT;
+    
+    -- Si el saldo está disminuyendo significativamente, verificar gastos pendientes
+    IF NEW.saldo < OLD.saldo AND (OLD.saldo - NEW.saldo) > 1000000 THEN
+        -- Calcular gastos pendientes en categorías de gasto
+        SELECT COALESCE(SUM(t.monto), 0) INTO total_gastos_pendientes
+        FROM transacciones t
+        INNER JOIN categorias c ON t.categoria_id = c.id
+        WHERE t.usuario_id = NEW.id
+        AND c.tipo = 'gasto'
+        AND t.fecha <= CURDATE();
+        
+        -- Validar que después de la transferencia quede saldo para gastos pendientes
+        IF NEW.saldo < total_gastos_pendientes THEN
+            SIGNAL SQLSTATE '45000' 
+            SET MESSAGE_TEXT = 'Saldo insuficiente para cubrir gastos pendientes después de la transferencia';
+        END IF;
     END IF;
 END
 $$
