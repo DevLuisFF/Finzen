@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 04-10-2025 a las 00:40:08
+-- Tiempo de generación: 04-10-2025 a las 00:57:14
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -60,6 +60,23 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_prevenir_categorias_duplicadas` BEFORE INSERT ON `categorias` FOR EACH ROW BEGIN
+    DECLARE categoria_existente INT;
+    
+    SELECT COUNT(*) INTO categoria_existente 
+    FROM categorias 
+    WHERE usuario_id = NEW.usuario_id 
+    AND nombre = NEW.nombre 
+    AND tipo = NEW.tipo;
+    
+    IF categoria_existente > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Ya existe una categoría con este nombre y tipo para el usuario';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_prevenir_eliminar_categoria_con_transacciones` BEFORE DELETE ON `categorias` FOR EACH ROW BEGIN
     DECLARE transacciones_count INT;
     
@@ -70,6 +87,15 @@ CREATE TRIGGER `trg_prevenir_eliminar_categoria_con_transacciones` BEFORE DELETE
     IF transacciones_count > 0 THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'No se puede eliminar una categoría con transacciones asociadas';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_formato_color` BEFORE INSERT ON `categorias` FOR EACH ROW BEGIN
+    IF NEW.color NOT REGEXP '^#[0-9A-Fa-f]{6}$' THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El color debe estar en formato hexadecimal (#RRGGBB)';
     END IF;
 END
 $$
@@ -112,6 +138,16 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_establecer_fecha_fin_presupuesto` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    IF NEW.periodo = 'mensual' AND NEW.fecha_fin IS NULL THEN
+        SET NEW.fecha_fin = DATE_ADD(NEW.fecha_inicio, INTERVAL 1 MONTH);
+    ELSEIF NEW.periodo = 'anual' AND NEW.fecha_fin IS NULL THEN
+        SET NEW.fecha_fin = DATE_ADD(NEW.fecha_inicio, INTERVAL 1 YEAR);
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_validar_fechas_presupuesto` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
     IF NEW.fecha_fin IS NOT NULL AND NEW.fecha_inicio > NEW.fecha_fin THEN
         SIGNAL SQLSTATE '45000' 
@@ -125,6 +161,29 @@ CREATE TRIGGER `trg_validar_presupuesto_positivo` BEFORE INSERT ON `presupuestos
     IF NEW.monto <= 0 THEN
         SIGNAL SQLSTATE '45000' 
         SET MESSAGE_TEXT = 'El presupuesto debe ser mayor a 0';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_validar_presupuesto_usuario_categoria` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
+    DECLARE categoria_tipo ENUM('ingreso','gasto');
+    DECLARE categoria_usuario_id INT;
+    
+    -- Verificar que la categoría pertenece al usuario
+    SELECT usuario_id, tipo INTO categoria_usuario_id, categoria_tipo
+    FROM categorias 
+    WHERE id = NEW.categoria_id;
+    
+    IF categoria_usuario_id != NEW.usuario_id THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'La categoría no pertenece al usuario';
+    END IF;
+    
+    -- Solo permitir presupuestos para categorías de gasto
+    IF categoria_tipo != 'gasto' THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'Solo se pueden crear presupuestos para categorías de gasto';
     END IF;
 END
 $$
@@ -150,6 +209,31 @@ CREATE TABLE `roles` (
 INSERT INTO `roles` (`id`, `nombre`, `creado_en`, `actualizado_en`) VALUES
 (1, 'admin', '2025-09-15 01:18:05', NULL),
 (2, 'usuario', '2025-09-15 01:18:05', NULL);
+
+--
+-- Disparadores `roles`
+--
+DELIMITER $$
+CREATE TRIGGER `trg_actualizar_timestamp_roles` BEFORE UPDATE ON `roles` FOR EACH ROW BEGIN
+    SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_prevenir_eliminar_rol_en_uso` BEFORE DELETE ON `roles` FOR EACH ROW BEGIN
+    DECLARE usuarios_count INT;
+    
+    SELECT COUNT(*) INTO usuarios_count 
+    FROM usuarios 
+    WHERE rol_id = OLD.id;
+    
+    IF usuarios_count > 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se puede eliminar un rol que está siendo usado por usuarios';
+    END IF;
+END
+$$
+DELIMITER ;
 
 -- --------------------------------------------------------
 
@@ -274,6 +358,22 @@ END
 $$
 DELIMITER ;
 DELIMITER $$
+CREATE TRIGGER `trg_validar_actualizacion_transaccion` BEFORE UPDATE ON `transacciones` FOR EACH ROW BEGIN
+    -- Prevenir cambios de usuario_id en transacciones existentes
+    IF OLD.usuario_id != NEW.usuario_id THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'No se puede cambiar el usuario de una transacción existente';
+    END IF;
+    
+    -- Validar que la fecha no sea futura
+    IF NEW.fecha > CURDATE() THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'La fecha de la transacción no puede ser futura';
+    END IF;
+END
+$$
+DELIMITER ;
+DELIMITER $$
 CREATE TRIGGER `trg_validar_monto_positivo` BEFORE INSERT ON `transacciones` FOR EACH ROW BEGIN
     IF NEW.monto <= 0 THEN
         SIGNAL SQLSTATE '45000' 
@@ -317,6 +417,15 @@ INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_cont
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_usuarios` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
     SET NEW.actualizado_en = CURRENT_TIMESTAMP;
+END
+$$
+DELIMITER ;
+DELIMITER $$
+CREATE TRIGGER `trg_prevenir_saldo_negativo` BEFORE UPDATE ON `usuarios` FOR EACH ROW BEGIN
+    IF NEW.saldo < 0 THEN
+        SIGNAL SQLSTATE '45000' 
+        SET MESSAGE_TEXT = 'El saldo no puede ser negativo';
+    END IF;
 END
 $$
 DELIMITER ;
