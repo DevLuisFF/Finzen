@@ -24,34 +24,22 @@ function parseMoneyInput($input) {
 // Clase para manejar transacciones
 class TransactionRepository {
     private $db;
-
     public function __construct($db) {
         $this->db = $db;
     }
-
     public function getAll($userId, $filters = [], $limit = 10, $offset = 0) {
         $query = "
             SELECT t.*,
-                   c.nombre AS cuenta_nombre,
-                   c.moneda AS cuenta_moneda,
                    cat.nombre AS categoria_nombre,
                    cat.tipo AS tipo_categoria,
                    cat.color AS categoria_color,
                    cat.icono AS categoria_icono
             FROM transacciones t
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            WHERE c.usuario_id = :usuario_id
-            AND c.activa = TRUE
+            WHERE t.usuario_id = :usuario_id
         ";
-
         $params = [':usuario_id' => $userId];
-
         // Aplicar filtros
-        if (!empty($filters['cuenta_id'])) {
-            $query .= " AND t.cuenta_id = :cuenta_id";
-            $params[':cuenta_id'] = $filters['cuenta_id'];
-        }
         if (!empty($filters['categoria_id'])) {
             $query .= " AND t.categoria_id = :categoria_id";
             $params[':categoria_id'] = $filters['categoria_id'];
@@ -68,7 +56,6 @@ class TransactionRepository {
             $query .= " AND t.fecha <= :fecha_hasta";
             $params[':fecha_hasta'] = $filters['fecha_hasta'];
         }
-
         // Contar total para paginación
         $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
         $countStmt = $this->db->prepare($countQuery);
@@ -77,24 +64,20 @@ class TransactionRepository {
         }
         $countStmt->execute();
         $total = $countStmt->fetchColumn();
-
         // Aplicar orden y paginación
         $query .= " ORDER BY t.fecha DESC, t.creado_en DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($query);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
-
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
         }
-
         $stmt->execute();
         return [
             'data' => $stmt->fetchAll(),
             'total' => $total
         ];
     }
-
     public function getStats($userId, $filters = []) {
         $query = "
             SELECT 
@@ -103,19 +86,11 @@ class TransactionRepository {
                 COALESCE(SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) as total_gastos,
                 COALESCE(SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE -t.monto END), 0) as balance
             FROM transacciones t
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            WHERE c.usuario_id = :usuario_id
-            AND c.activa = TRUE
+            WHERE t.usuario_id = :usuario_id
         ";
-
         $params = [':usuario_id' => $userId];
-
         // Aplicar filtros
-        if (!empty($filters['cuenta_id'])) {
-            $query .= " AND t.cuenta_id = :cuenta_id";
-            $params[':cuenta_id'] = $filters['cuenta_id'];
-        }
         if (!empty($filters['categoria_id'])) {
             $query .= " AND t.categoria_id = :categoria_id";
             $params[':categoria_id'] = $filters['categoria_id'];
@@ -132,7 +107,6 @@ class TransactionRepository {
             $query .= " AND t.fecha <= :fecha_hasta";
             $params[':fecha_hasta'] = $filters['fecha_hasta'];
         }
-
         $stmt = $this->db->prepare($query);
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
@@ -140,41 +114,52 @@ class TransactionRepository {
         $stmt->execute();
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
-
     public function create($data) {
         $stmt = $this->db->prepare("
             INSERT INTO transacciones
-            (cuenta_id, categoria_id, monto, descripcion, fecha, creado_en, actualizado_en)
+            (usuario_id, categoria_id, monto, descripcion, fecha, creado_en, actualizado_en)
             VALUES
-            (:cuenta_id, :categoria_id, :monto, :descripcion, :fecha, NOW(), NOW())
+            (:usuario_id, :categoria_id, :monto, :descripcion, :fecha, NOW(), NOW())
         ");
+        $data['usuario_id'] = $_SESSION["user_id"];
         return $stmt->execute($data);
     }
-
     public function update($id, $data) {
         $data['id'] = $id;
         $stmt = $this->db->prepare("
             UPDATE transacciones SET
-                cuenta_id = :cuenta_id,
                 categoria_id = :categoria_id,
                 monto = :monto,
                 descripcion = :descripcion,
                 fecha = :fecha,
                 actualizado_en = NOW()
-            WHERE id = :id 
-            AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
+            WHERE id = :id AND usuario_id = :usuario_id
         ");
         $data['usuario_id'] = $_SESSION["user_id"];
         return $stmt->execute($data);
     }
-
     public function delete($id, $userId) {
         $stmt = $this->db->prepare("
             DELETE FROM transacciones
-            WHERE id = :id 
-            AND cuenta_id IN (SELECT id FROM cuentas WHERE usuario_id = :usuario_id)
+            WHERE id = :id AND usuario_id = :usuario_id
         ");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
+    }
+    
+    // Función para obtener el saldo actual del usuario
+    public function getSaldoActual($userId) {
+        $stmt = $this->db->prepare("SELECT saldo FROM usuarios WHERE id = ?");
+        $stmt->execute([$userId]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result ? $result['saldo'] : 0;
+    }
+    
+    // Función para verificar si una categoría es de gasto
+    public function esCategoriaGasto($categoriaId) {
+        $stmt = $this->db->prepare("SELECT tipo FROM categorias WHERE id = ?");
+        $stmt->execute([$categoriaId]);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $result && $result['tipo'] === 'gasto';
     }
 }
 
@@ -182,17 +167,6 @@ class TransactionRepository {
 $transactionRepo = new TransactionRepository($db);
 $error = '';
 $success = '';
-
-// Obtener cuentas activas del usuario
-$stmtCuentas = $db->prepare("
-    SELECT id, nombre, moneda 
-    FROM cuentas 
-    WHERE usuario_id = :usuario_id AND activa = TRUE 
-    ORDER BY nombre
-");
-$stmtCuentas->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
-$stmtCuentas->execute();
-$cuentas = $stmtCuentas->fetchAll();
 
 // Obtener categorías del usuario
 $stmtCategorias = $db->prepare("
@@ -214,29 +188,63 @@ $tipos = [
 // Procesar operaciones CRUD
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
     $data = [
-        'cuenta_id' => $_POST["cuenta_id"] ?? null,
         'categoria_id' => $_POST["categoria_id"] ?? null,
         'monto' => parseMoneyInput($_POST["monto"] ?? "0"),
         'descripcion' => trim($_POST["descripcion"] ?? ""),
         'fecha' => $_POST["fecha"] ?? date("Y-m-d")
     ];
-
+    
     try {
-        if (isset($_POST["create"]) && $data['cuenta_id'] && $data['categoria_id']) {
-            $transactionRepo->create($data);
-            $_SESSION['success'] = 'Transacción creada exitosamente';
+        if (isset($_POST["create"]) && $data['categoria_id']) {
+            // Verificar saldo antes de intentar la transacción
+            $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
+            $esGasto = $transactionRepo->esCategoriaGasto($data['categoria_id']);
+            
+            if ($esGasto && $data['monto'] > $saldoActual) {
+                $error = 'Saldo insuficiente para realizar este gasto. ';
+                $error .= 'Saldo disponible: ' . formatMoney($saldoActual) . '. ';
+                $error .= 'Monto del gasto: ' . formatMoney($data['monto']) . '. ';
+                $error .= 'Faltan: ' . formatMoney($data['monto'] - $saldoActual);
+            } else {
+                $transactionRepo->create($data);
+                $_SESSION['success'] = 'Transacción creada exitosamente';
+                header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+                exit();
+            }
         }
+        
         if (isset($_POST["update"]) && isset($_POST["id"])) {
             $data['id'] = $_POST["id"];
-            $transactionRepo->update($data['id'], $data);
-            $_SESSION['success'] = 'Transacción actualizada exitosamente';
+            
+            // Verificar saldo antes de actualizar la transacción
+            $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
+            $esGasto = $transactionRepo->esCategoriaGasto($data['categoria_id']);
+            
+            if ($esGasto && $data['monto'] > $saldoActual) {
+                $error = 'Saldo insuficiente para actualizar a este gasto. ';
+                $error .= 'Saldo disponible: ' . formatMoney($saldoActual) . '. ';
+                $error .= 'Monto del gasto: ' . formatMoney($data['monto']) . '. ';
+                $error .= 'Faltan: ' . formatMoney($data['monto'] - $saldoActual);
+            } else {
+                $transactionRepo->update($data['id'], $data);
+                $_SESSION['success'] = 'Transacción actualizada exitosamente';
+                header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+                exit();
+            }
+        }
+    } catch (PDOException $e) {
+        // Capturar errores específicos de la base de datos
+        if (strpos($e->getMessage(), 'Saldo insuficiente') !== false) {
+            $error = 'Saldo insuficiente para realizar esta operación. ';
+            $error .= 'Por favor, verifique su saldo disponible antes de registrar gastos.';
+        } else if (strpos($e->getMessage(), 'presupuesto mensual') !== false) {
+            $error = 'Esta transacción excede el presupuesto mensual asignado para esta categoría.';
+        } else {
+            $error = 'Error al procesar la operación: ' . $e->getMessage();
         }
     } catch (Exception $e) {
         $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
-    
-    header("Location: " . $_SERVER["PHP_SELF"], true, 303);
-    exit();
 }
 
 // Eliminar transacción
@@ -260,7 +268,6 @@ if (isset($_SESSION['error'])) {
 
 // Obtener filtros de la URL
 $filters = [
-    'cuenta_id' => $_GET['cuenta_id'] ?? '',
     'categoria_id' => $_GET['categoria_id'] ?? '',
     'tipo' => $_GET['tipo'] ?? '',
     'fecha_desde' => $_GET['fecha_desde'] ?? '',
@@ -310,13 +317,10 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             t.descripcion,
             cat.nombre as categoria,
             cat.tipo,
-            c.nombre as cuenta,
-            t.monto,
-            c.moneda
+            t.monto
         FROM transacciones t
-        INNER JOIN cuentas c ON t.cuenta_id = c.id
         INNER JOIN categorias cat ON t.categoria_id = cat.id
-        WHERE c.usuario_id = ?
+        WHERE t.usuario_id = ?
         ORDER BY t.fecha DESC
     ");
     $stmt->execute([$usuario_id]);
@@ -324,12 +328,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     
     // Formatear datos para exportación
     foreach ($exportData as &$row) {
-        $row['monto'] = formatMoney($row['monto'], $row['moneda']);
-        unset($row['moneda']);
+        $row['monto'] = formatMoney($row['monto']);
     }
     
     exportToCSV($exportData, 'transacciones_' . date('Y-m-d'));
 }
+
+// Obtener saldo actual para mostrar en la interfaz
+$saldoActual = $transactionRepo->getSaldoActual($usuario_id);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -621,6 +627,25 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             font-size: 1rem;
         }
         
+        .saldo-info {
+            background: var(--bs-primary);
+            color: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        .saldo-info h3 {
+            color: white;
+            margin-bottom: 0.5rem;
+        }
+        
+        .saldo-info .badge {
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            font-size: 0.875rem;
+        }
+        
         @media (max-width: 768px) {
             .container {
                 padding-left: 1rem;
@@ -644,8 +669,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                
-                Finzen
+                <i class="bi bi-wallet2 me-2"></i> Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -672,8 +696,14 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                             <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="reportes.php" class="nav-link">
+                            <i class="bi bi-graph-up me-2"></i>Reportes
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted me-3"><?= htmlspecialchars($_SESSION['username']) ?></span>
                     <a href="?export=transacciones" class="btn btn-outline-success btn-sm">
                         <i class="bi bi-download me-1"></i> Exportar CSV
                     </a>
@@ -684,7 +714,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             </div>
         </div>
     </nav>
-
     <!-- Main Content -->
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -696,7 +725,22 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 <i class="bi bi-plus-circle me-1"></i> Nueva Transacción
             </button>
         </div>
-
+        
+        <!-- Información de saldo -->
+        <div class="saldo-info">
+            <div class="row align-items-center">
+                <div class="col-md-8">
+                    <h3 class="mb-1"><?= formatMoney($saldoActual) ?></h3>
+                    <p class="mb-0">Saldo disponible actual</p>
+                </div>
+                <div class="col-md-4 text-end">
+                    <span class="badge">
+                        <i class="bi bi-wallet2 me-1"></i> Estado de cuenta
+                    </span>
+                </div>
+            </div>
+        </div>
+        
         <!-- Alertas -->
         <?php if (!empty($success)): ?>
             <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -705,15 +749,42 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         <?php endif; ?>
-
         <?php if (!empty($error)): ?>
             <div class="alert alert-danger alert-dismissible fade show" role="alert">
                 <i class="bi bi-exclamation-triangle me-2"></i>
-                <?= htmlspecialchars($error) ?>
+                <strong>Error:</strong> <?= htmlspecialchars($error) ?>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         <?php endif; ?>
-
+        
+        <!-- Quick Actions -->
+        <div class="row g-3 mb-4 quick-actions">
+            <div class="col-md-3">
+                <a href="transacciones.php?action=new" class="btn btn-primary w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-plus-circle fs-2 mb-2"></i>
+                    <span>Nueva Transacción</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="presupuestos.php" class="btn btn-success w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-pie-chart fs-2 mb-2"></i>
+                    <span>Gestionar Presupuestos</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="reportes.php" class="btn btn-info w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-graph-up fs-2 mb-2"></i>
+                    <span>Ver Reportes</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-warning w-100 d-flex flex-column align-items-center" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+                    <i class="bi bi-tag fs-2 mb-2"></i>
+                    <span>Agregar Categoría</span>
+                </button>
+            </div>
+        </div>
+        
         <!-- Estadísticas -->
         <div class="row mb-4">
             <div class="col-md-3">
@@ -777,22 +848,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 </div>
             </div>
         </div>
-
+        
         <!-- Filtros -->
         <div class="card mb-4">
             <div class="card-body">
                 <form method="GET" action="" class="row g-3 align-items-end">
-                    <div class="col-md-2">
-                        <label for="cuenta_id" class="form-label">Cuenta</label>
-                        <select class="form-select" id="cuenta_id" name="cuenta_id">
-                            <option value="">Todas las cuentas</option>
-                            <?php foreach ($cuentas as $cuenta): ?>
-                                <option value="<?= $cuenta["id"] ?>" <?= ($filters['cuenta_id'] == $cuenta["id"]) ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($cuenta["nombre"]) ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
                     <div class="col-md-2">
                         <label for="categoria_id" class="form-label">Categoría</label>
                         <select class="form-select" id="categoria_id" name="categoria_id">
@@ -836,7 +896,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 </form>
             </div>
         </div>
-
+        
         <!-- Lista de transacciones -->
         <div class="card">
             <div class="card-body">
@@ -855,7 +915,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                             <thead class="table-light">
                                 <tr>
                                     <th>Fecha</th>
-                                    <th>Cuenta</th>
                                     <th>Categoría</th>
                                     <th>Descripción</th>
                                     <th class="text-end">Monto</th>
@@ -871,18 +930,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                         <strong><?= date("d/m/Y", strtotime($transaccion["fecha"])) ?></strong>
                                         <br>
                                         <small class="text-muted"><?= date("H:i", strtotime($transaccion["creado_en"])) ?></small>
-                                    </td>
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <div class="transaction-icon bg-primary bg-opacity-10 text-primary">
-                                                <i class="bi bi-wallet2"></i>
-                                            </div>
-                                            <div>
-                                                <strong><?= htmlspecialchars($transaccion["cuenta_nombre"]) ?></strong>
-                                                <br>
-                                                <small class="text-muted"><?= htmlspecialchars($transaccion["cuenta_moneda"]) ?></small>
-                                            </div>
-                                        </div>
                                     </td>
                                     <td>
                                         <div class="d-flex align-items-center">
@@ -920,7 +967,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                                             data-bs-toggle="modal"
                                                             data-bs-target="#editTransactionModal"
                                                             data-id="<?= $transaccion["id"] ?>"
-                                                            data-cuenta_id="<?= $transaccion["cuenta_id"] ?>"
                                                             data-categoria_id="<?= $transaccion["categoria_id"] ?>"
                                                             data-monto="<?= $transaccion["monto"] / 100 ?>"
                                                             data-descripcion="<?= htmlspecialchars($transaccion["descripcion"]) ?>"
@@ -930,7 +976,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                                 </li>
                                                 <li>
                                                     <a class="dropdown-item text-danger"
-                                                       href="?delete=<?= $transaccion["id"] ?>&page=<?= $page ?>&cuenta_id=<?= $filters['cuenta_id'] ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>"
+                                                       href="?delete=<?= $transaccion["id"] ?>&page=<?= $page ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>"
                                                        onclick="return confirm('¿Estás seguro de eliminar esta transacción?\n\nEsta acción no se puede deshacer.')">
                                                         <i class="bi bi-trash me-2"></i> Eliminar
                                                     </a>
@@ -943,30 +989,27 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                             </tbody>
                         </table>
                     </div>
-
                     <!-- Paginación -->
                     <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page - 1 ?>&cuenta_id=<?= $filters['cuenta_id'] ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>" aria-label="Anterior">
+                                    <a class="page-link" href="?page=<?= $page - 1 ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>" aria-label="Anterior">
                                         <span aria-hidden="true">&laquo;</span>
                                     </a>
                                 </li>
                             <?php endif; ?>
-
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                 <li class="page-item <?= $i === $page ? 'active' : '' ?>">
-                                    <a class="page-link" href="?page=<?= $i ?>&cuenta_id=<?= $filters['cuenta_id'] ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>">
+                                    <a class="page-link" href="?page=<?= $i ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>">
                                         <?= $i ?>
                                     </a>
                                 </li>
                             <?php endfor; ?>
-
                             <?php if ($page < $totalPages): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page + 1 ?>&cuenta_id=<?= $filters['cuenta_id'] ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>" aria-label="Siguiente">
+                                    <a class="page-link" href="?page=<?= $page + 1 ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>" aria-label="Siguiente">
                                         <span aria-hidden="true">&raquo;</span>
                                     </a>
                                 </li>
@@ -978,7 +1021,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             </div>
         </div>
     </div>
-
+    
     <!-- Modal para agregar nueva transacción -->
     <div class="modal fade" id="addTransactionModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
@@ -991,21 +1034,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 </div>
                 <form method="POST" action="">
                     <div class="modal-body">
-                        <div class="mb-3">
-                            <label for="cuenta_id" class="form-label">Cuenta</label>
-                            <select class="form-select" id="cuenta_id" name="cuenta_id" required>
-                                <option value="">Seleccionar Cuenta</option>
-                                <?php foreach ($cuentas as $cuenta): ?>
-                                    <option value="<?= $cuenta["id"] ?>"><?= htmlspecialchars($cuenta["nombre"]) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual) ?>
                         </div>
                         <div class="mb-3">
                             <label for="categoria_id" class="form-label">Categoría</label>
                             <select class="form-select" id="categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
-                                    <option value="<?= $categoria["id"] ?>">
+                                    <option value="<?= $categoria["id"] ?>" data-tipo="<?= $categoria["tipo"] ?>">
                                         <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?>)
                                     </option>
                                 <?php endforeach; ?>
@@ -1036,7 +1074,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             </div>
         </div>
     </div>
-
+    
     <!-- Modal para editar transacción -->
     <div class="modal fade" id="editTransactionModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
@@ -1050,21 +1088,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 <form method="POST" action="">
                     <input type="hidden" id="edit_id" name="id">
                     <div class="modal-body">
-                        <div class="mb-3">
-                            <label for="edit_cuenta_id" class="form-label">Cuenta</label>
-                            <select class="form-select" id="edit_cuenta_id" name="cuenta_id" required>
-                                <option value="">Seleccionar Cuenta</option>
-                                <?php foreach ($cuentas as $cuenta): ?>
-                                    <option value="<?= $cuenta["id"] ?>"><?= htmlspecialchars($cuenta["nombre"]) ?></option>
-                                <?php endforeach; ?>
-                            </select>
+                        <div class="alert alert-info">
+                            <i class="bi bi-info-circle me-2"></i>
+                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual) ?>
                         </div>
                         <div class="mb-3">
                             <label for="edit_categoria_id" class="form-label">Categoría</label>
                             <select class="form-select" id="edit_categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
-                                    <option value="<?= $categoria["id"] ?>">
+                                    <option value="<?= $categoria["id"] ?>" data-tipo="<?= $categoria["tipo"] ?>">
                                         <?= htmlspecialchars($categoria["nombre"]) ?> (<?= $tipos[$categoria["tipo"]] ?>)
                                     </option>
                                 <?php endforeach; ?>
@@ -1095,17 +1128,15 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             </div>
         </div>
     </div>
-
+    
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Manejar edición de transacciones
             document.querySelectorAll('.edit-btn').forEach(button => {
                 button.addEventListener('click', function() {
                     document.getElementById('edit_id').value = this.dataset.id;
-                    document.getElementById('edit_cuenta_id').value = this.dataset.cuenta_id;
                     document.getElementById('edit_categoria_id').value = this.dataset.categoria_id;
                     
                     // Formatear monto para mostrar con separadores de miles
@@ -1116,7 +1147,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     document.getElementById('edit_fecha').value = this.dataset.fecha;
                 });
             });
-
+            
             // Formatear input de monto para aceptar solo números y puntos
             document.querySelectorAll('input[name="monto"], #edit_monto').forEach(input => {
                 input.addEventListener('input', function() {
@@ -1129,7 +1160,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                         this.value = parts[0] + '.' + parts.slice(1).join('');
                     }
                 });
-
+                
                 input.addEventListener('blur', function() {
                     if (this.value) {
                         // Formatear con separadores de miles
@@ -1140,7 +1171,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     }
                 });
             });
-
+            
             // Validar formulario antes de enviar
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function(e) {
@@ -1151,6 +1182,50 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     }
                 });
             });
+            
+            // Validación en tiempo real para gastos
+            const categoriaSelect = document.getElementById('categoria_id');
+            const montoInput = document.getElementById('monto');
+            const editCategoriaSelect = document.getElementById('edit_categoria_id');
+            const editMontoInput = document.getElementById('edit_monto');
+            
+            function validarGastoEnTiempoReal(categoriaSelect, montoInput) {
+                if (!categoriaSelect || !montoInput) return;
+                
+                const categoriaOption = categoriaSelect.options[categoriaSelect.selectedIndex];
+                const esGasto = categoriaOption && categoriaOption.dataset.tipo === 'gasto';
+                
+                if (esGasto && montoInput.value) {
+                    const monto = parseFloat(montoInput.value.replace(/\./g, ''));
+                    const saldoActual = <?= $saldoActual ?>;
+                    
+                    if (monto > saldoActual) {
+                        montoInput.classList.add('is-invalid');
+                        // Mostrar mensaje de error
+                        let errorElement = montoInput.nextElementSibling;
+                        if (!errorElement || !errorElement.classList.contains('invalid-feedback')) {
+                            errorElement = document.createElement('div');
+                            errorElement.className = 'invalid-feedback';
+                            montoInput.parentNode.appendChild(errorElement);
+                        }
+                        errorElement.innerHTML = `Saldo insuficiente. Disponible: ${(saldoActual/100).toLocaleString('es-PY')}. Faltan: ${((monto - saldoActual)/100).toLocaleString('es-PY')}`;
+                    } else {
+                        montoInput.classList.remove('is-invalid');
+                    }
+                } else {
+                    montoInput.classList.remove('is-invalid');
+                }
+            }
+            
+            if (categoriaSelect && montoInput) {
+                categoriaSelect.addEventListener('change', () => validarGastoEnTiempoReal(categoriaSelect, montoInput));
+                montoInput.addEventListener('input', () => validarGastoEnTiempoReal(categoriaSelect, montoInput));
+            }
+            
+            if (editCategoriaSelect && editMontoInput) {
+                editCategoriaSelect.addEventListener('change', () => validarGastoEnTiempoReal(editCategoriaSelect, editMontoInput));
+                editMontoInput.addEventListener('input', () => validarGastoEnTiempoReal(editCategoriaSelect, editMontoInput));
+            }
         });
     </script>
 </body>

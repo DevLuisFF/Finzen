@@ -208,6 +208,34 @@ class OverBudgetMetric extends MetricCalculator {
     }
 }
 
+// NUEVA CLASE: Para obtener las alertas detalladas de presupuestos
+class DetailedBudgetAlertsMetric extends MetricCalculator {
+    public function calculate($userId) {
+        $stmt = $this->db->prepare("
+            SELECT 
+                p.*,
+                c.nombre as categoria_nombre,
+                c.color as categoria_color,
+                c.icono as categoria_icono,
+                COALESCE(SUM(t.monto), 0) as gastos_actuales,
+                (COALESCE(SUM(t.monto), 0) / p.monto) * 100 as porcentaje_uso
+            FROM presupuestos p
+            INNER JOIN categorias c ON p.categoria_id = c.id
+            LEFT JOIN transacciones t ON p.categoria_id = t.categoria_id
+                AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE())
+            WHERE p.usuario_id = ?
+            AND p.notificacion = 1
+            AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
+            GROUP BY p.id, c.nombre, c.color, c.icono
+            HAVING porcentaje_uso >= 80
+            ORDER BY porcentaje_uso DESC
+            LIMIT 5
+        ");
+        $stmt->execute([$userId]);
+        return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
 // Obtener métricas
 try {
     $metrics = [
@@ -223,6 +251,9 @@ try {
     $recentTransactions = (new RecentTransactionsMetric($db))->calculate($usuario_id);
     $monthlyFlow = (new MonthlyFlowMetric($db))->calculate($usuario_id);
     $expenseByCategory = (new ExpenseByCategoryMetric($db))->calculate($usuario_id);
+    
+    // OBTENER ALERTAS DETALLADAS - NUEVO
+    $detailedBudgetAlerts = (new DetailedBudgetAlertsMetric($db))->calculate($usuario_id);
     
     // Obtener información del usuario para la moneda
     $stmt = $db->prepare("SELECT moneda FROM usuarios WHERE id = ?");
@@ -244,6 +275,7 @@ try {
     $recentTransactions = [];
     $monthlyFlow = ['labels' => [], 'ingresos' => [], 'gastos' => []];
     $expenseByCategory = ['labels' => [], 'data' => [], 'colors' => [], 'icons' => []];
+    $detailedBudgetAlerts = []; // NUEVO: alertas vacías por defecto
     $user_currency = 'PYG';
 }
 
@@ -510,6 +542,51 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             transform: translateY(-3px);
             box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
         }
+        
+        /* NUEVOS ESTILOS PARA ALERTAS DETALLADAS */
+        .alert-budget {
+            border-left: 4px solid var(--bs-warning);
+            background: linear-gradient(135deg, #fff 0%, #fff9e6 100%);
+            border-radius: 0.75rem;
+            margin-bottom: 0.75rem;
+        }
+        
+        .alert-budget.danger {
+            border-left-color: var(--bs-danger);
+            background: linear-gradient(135deg, #fff 0%, #ffe6e6 100%);
+        }
+        
+        .alert-budget:last-child {
+            margin-bottom: 0;
+        }
+        
+        .progress-container {
+            height: 8px;
+            background-color: var(--bs-light);
+            border-radius: 4px;
+            margin-top: 0.5rem;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 0.6s ease;
+            position: relative;
+        }
+        
+        .progress-success {
+            background: linear-gradient(90deg, var(--bs-success), #20c997);
+        }
+        
+        .progress-warning {
+            background: linear-gradient(90deg, var(--bs-warning), #fd7e14);
+        }
+        
+        .progress-danger {
+            background: linear-gradient(90deg, var(--bs-danger), #e52535);
+        }
     </style>
 </head>
 <body>
@@ -572,8 +649,53 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             </div>
         </div>
 
-        <!-- Alertas de Presupuesto -->
-        <?php if ($metrics['presupuestos_excedidos'] > 0): ?>
+        <!-- Alertas de Presupuesto - MEJORADO CON ALERTAS DETALLADAS -->
+        <?php if (!empty($detailedBudgetAlerts)): ?>
+            <div class="card mb-4 border-warning">
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-exclamation-triangle-fill text-warning me-2 fs-4"></i>
+                        <h5 class="mb-0">Alertas de Presupuesto</h5>
+                    </div>
+                    <?php foreach ($detailedBudgetAlerts as $alert): ?>
+                        <div class="alert alert-budget <?= $alert['porcentaje_uso'] > 100 ? 'danger' : '' ?> d-flex align-items-center justify-content-between">
+                            <div class="d-flex align-items-center">
+                                <div class="transaction-icon me-3" style="background-color: <?= htmlspecialchars($alert['categoria_color']) ?>20; color: <?= htmlspecialchars($alert['categoria_color']) ?>;">
+                                    <i class="<?= getBootstrapIcon($alert['categoria_icono']) ?>"></i>
+                                </div>
+                                <div class="flex-grow-1">
+                                    <strong><?= htmlspecialchars($alert['categoria_nombre']) ?></strong> - 
+                                    <?= round($alert['porcentaje_uso']) ?>% usado 
+                                    (<?= formatMoney($alert['gastos_actuales'], $user_currency) ?> de <?= formatMoney($alert['monto'], $user_currency) ?>)
+                                    
+                                    <!-- Barra de progreso -->
+                                    <div class="progress-container">
+                                        <div class="progress-bar <?= $alert['porcentaje_uso'] > 100 ? 'progress-danger' : ($alert['porcentaje_uso'] > 80 ? 'progress-warning' : 'progress-success') ?>" 
+                                             style="width: <?= min(100, $alert['porcentaje_uso']) ?>%">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <?php if ($alert['porcentaje_uso'] > 100): ?>
+                                    <span class="badge bg-danger">Excedido</span>
+                                <?php else: ?>
+                                    <span class="badge bg-warning">Cerca del límite</span>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                    <div class="text-end mt-2">
+                        <a href="presupuestos.php" class="btn btn-outline-primary btn-sm">
+                            Gestionar Presupuestos <i class="bi bi-arrow-right ms-1"></i>
+                        </a>
+                    </div>
+                </div>
+            </div>
+        <?php endif; ?>
+
+        <!-- Alertas generales (mantener las existentes) -->
+        <?php if ($metrics['presupuestos_excedidos'] > 0 && empty($detailedBudgetAlerts)): ?>
         <div class="alert alert-danger d-flex align-items-center mb-4">
             <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
             <div>
@@ -583,7 +705,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
         </div>
         <?php endif; ?>
 
-        <?php if ($metrics['alertas_presupuesto'] > 0): ?>
+        <?php if ($metrics['alertas_presupuesto'] > 0 && empty($detailedBudgetAlerts)): ?>
         <div class="alert alert-warning d-flex align-items-center mb-4">
             <i class="bi bi-info-circle-fill me-2 fs-5"></i>
             <div>
@@ -779,8 +901,8 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     <div class="empty-state">
                         <i class="bi bi-receipt"></i>
                         <p class="mb-0">No hay transacciones recientes</p>
-                        <a href="transacciones.php?action=new" class="btn btn-primary mt-3">
-                            <i class="bi bi-plus-circle me-1"></i> Crear primera transacción
+                        <a href="transacciones.php?action=new" class="btn btn-primary mt-2">
+                             Crear primera transacción
                         </a>
                     </div>
                 <?php else: ?>

@@ -1,7 +1,7 @@
 <?php
 session_start();
 if (!isset($_SESSION["user_id"])) {
-    header("Location: ../auth/login.php");
+    header("Location: ../index.php");
     exit();
 }
 require "../config/database.php";
@@ -9,8 +9,14 @@ $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION["user_id"];
 
 // Función para formatear dinero
-function formatMoney($amount) {
-    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+function formatMoney($amount, $moneda = 'PYG') {
+    $symbols = [
+        'PYG' => 'Gs ',
+        'USD' => '$ ',
+        'EUR' => '€ '
+    ];
+    $symbol = $symbols[$moneda] ?? 'Gs ';
+    return $symbol . number_format($amount / 100, 0, ',', '.');
 }
 
 // Función para convertir entrada de dinero a centavos
@@ -37,6 +43,7 @@ class BudgetRepository {
                 c.nombre AS categoria_nombre,
                 c.color AS categoria_color,
                 c.tipo AS categoria_tipo,
+                c.icono AS categoria_icono,
                 COALESCE(SUM(CASE WHEN c.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) AS gastos_actuales
             FROM
                 presupuestos p
@@ -62,12 +69,15 @@ class BudgetRepository {
             $query .= " AND p.periodo = :periodo";
             $params[':periodo'] = $filters['periodo'];
         }
-        if (isset($filters['notificacion'])) {
-            $query .= " AND p.notificacion = :notificacion";
-            $params[':notificacion'] = $filters['notificacion'];
+        if (isset($filters['estado'])) {
+            if ($filters['estado'] === 'activo') {
+                $query .= " AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())";
+            } elseif ($filters['estado'] === 'expirado') {
+                $query .= " AND p.fecha_fin < CURDATE()";
+            }
         }
 
-        $query .= " GROUP BY p.id, u.nombre_usuario, c.nombre, c.color, c.tipo";
+        $query .= " GROUP BY p.id, u.nombre_usuario, c.nombre, c.color, c.tipo, c.icono";
 
         // Contar total para paginación
         $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
@@ -99,6 +109,8 @@ class BudgetRepository {
         $stmt = $this->db->prepare("
             SELECT 
                 COUNT(*) as total_presupuestos,
+                COUNT(CASE WHEN fecha_fin IS NULL OR fecha_fin >= CURDATE() THEN 1 END) as presupuestos_activos,
+                COUNT(CASE WHEN fecha_fin < CURDATE() THEN 1 END) as presupuestos_expirados,
                 COALESCE(SUM(p.monto), 0) as total_presupuestado,
                 COALESCE(SUM(
                     CASE WHEN c.tipo = 'gasto' THEN 
@@ -114,6 +126,30 @@ class BudgetRepository {
         ");
         $stmt->execute([':usuario_id' => $userId]);
         return $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+
+    public function getBudgetAlerts($userId) {
+        $stmt = $this->db->prepare("
+            SELECT 
+                p.*,
+                c.nombre as categoria_nombre,
+                c.color as categoria_color,
+                COALESCE(SUM(t.monto), 0) as gastos_actuales,
+                (COALESCE(SUM(t.monto), 0) / p.monto) * 100 as porcentaje_uso
+            FROM presupuestos p
+            INNER JOIN categorias c ON p.categoria_id = c.id
+            LEFT JOIN transacciones t ON p.categoria_id = t.categoria_id
+                AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE())
+            WHERE p.usuario_id = :usuario_id
+            AND p.notificacion = 1
+            AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
+            GROUP BY p.id, c.nombre, c.color
+            HAVING porcentaje_uso >= 80
+            ORDER BY porcentaje_uso DESC
+            LIMIT 5
+        ");
+        $stmt->execute([':usuario_id' => $userId]);
+        return $stmt->fetchAll();
     }
 
     public function create($data) {
@@ -161,7 +197,7 @@ $success = '';
 
 // Obtener categorías del usuario (solo de gastos para presupuestos)
 $stmtCategorias = $db->prepare("
-    SELECT id, nombre, color, tipo 
+    SELECT id, nombre, color, icono, tipo 
     FROM categorias 
     WHERE usuario_id = :usuario_id AND tipo = 'gasto'
     ORDER BY nombre
@@ -169,6 +205,11 @@ $stmtCategorias = $db->prepare("
 $stmtCategorias->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
 $stmtCategorias->execute();
 $categorias = $stmtCategorias->fetchAll();
+
+// Obtener información del usuario para la moneda
+$stmt = $db->prepare("SELECT moneda FROM usuarios WHERE id = ?");
+$stmt->execute([$usuario_id]);
+$user_currency = $stmt->fetchColumn();
 
 // Procesar operaciones CRUD
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
@@ -200,28 +241,28 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             ]);
             
             if ($stmtCheck->fetchColumn() > 0) {
-                $_SESSION['error'] = 'Ya existe un presupuesto activo para esta categoría';
+                $_SESSION['error'] = '❌ Ya existe un presupuesto activo para esta categoría';
             } else {
                 if ($budgetRepo->create($data)) {
-                    $_SESSION['success'] = 'Presupuesto creado exitosamente';
+                    $_SESSION['success'] = '✅ Presupuesto creado exitosamente';
                 } else {
-                    $_SESSION['error'] = 'Error al crear el presupuesto';
+                    $_SESSION['error'] = '❌ Error al crear el presupuesto';
                 }
             }
         }
         if (isset($_POST["update"]) && isset($_POST["id"])) {
             if ($budgetRepo->update($_POST["id"], $data)) {
-                $_SESSION['success'] = 'Presupuesto actualizado exitosamente';
+                $_SESSION['success'] = '✅ Presupuesto actualizado exitosamente';
             } else {
-                $_SESSION['error'] = 'Error al actualizar el presupuesto';
+                $_SESSION['error'] = '❌ Error al actualizar el presupuesto';
             }
         }
     } catch (Exception $e) {
-        $error = 'Error al procesar la operación: ' . $e->getMessage();
+        $error = '❌ Error al procesar la operación: ' . $e->getMessage();
         $_SESSION['error'] = $error;
     }
     
-    header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+    header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query($_GET));
     exit();
 }
 
@@ -229,11 +270,11 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
     if ($budgetRepo->delete($id, $usuario_id)) {
-        $_SESSION['success'] = 'Presupuesto eliminado exitosamente';
+        $_SESSION['success'] = '✅ Presupuesto eliminado exitosamente';
     } else {
-        $_SESSION['error'] = 'Error al eliminar el presupuesto';
+        $_SESSION['error'] = '❌ Error al eliminar el presupuesto';
     }
-    header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+    header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query(array_diff_key($_GET, ['delete' => ''])));
     exit();
 }
 
@@ -251,12 +292,12 @@ if (isset($_SESSION['error'])) {
 $filters = [
     'categoria_id' => $_GET['categoria_id'] ?? '',
     'periodo' => $_GET['periodo'] ?? '',
-    'notificacion' => isset($_GET['notificacion']) ? (int)$_GET['notificacion'] : null
+    'estado' => $_GET['estado'] ?? ''
 ];
 
 // Configuración de paginación
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$perPage = 5;
+$perPage = 8;
 $offset = ($page - 1) * $perPage;
 
 // Obtener presupuestos con filtros y paginación
@@ -267,6 +308,9 @@ $totalPages = ceil($totalPresupuestos / $perPage);
 
 // Obtener estadísticas totales
 $stats = $budgetRepo->getTotalStats($usuario_id);
+
+// Obtener alertas de presupuesto
+$budgetAlerts = $budgetRepo->getBudgetAlerts($usuario_id);
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -337,7 +381,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             transform: translateY(-2px);
         }
         
-        /* Nuevos estilos mejorados */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -374,6 +417,10 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
         
         .stat-card.danger::before {
             background-color: var(--bs-danger);
+        }
+        
+        .stat-card.warning::before {
+            background-color: var(--bs-warning);
         }
         
         .stat-card:hover {
@@ -463,42 +510,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             font-size: 0.875rem;
         }
         
-        .table {
-            border-radius: 1rem;
-            overflow: hidden;
-        }
-        
-        .table th {
-            border: none;
-            background-color: var(--bs-light);
-            font-weight: 600;
-            color: #495057;
-            padding: 1rem;
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .table td {
-            border: none;
-            padding: 1rem;
-            vertical-align: middle;
-        }
-        
-        .table tbody tr {
-            border-bottom: 1px solid var(--bs-border);
-            transition: all 0.2s ease;
-        }
-        
-        .table tbody tr:hover {
-            background-color: rgba(0, 0, 0, 0.02);
-            transform: translateX(4px);
-        }
-        
-        .table tbody tr:last-child {
-            border-bottom: none;
-        }
-        
         .category-icon {
             width: 48px;
             height: 48px;
@@ -512,82 +523,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         
-        h1, h2, h3, h4, h5, h6 {
-            font-weight: 700;
-            color: var(--bs-dark);
-        }
-        
-        .card-title {
-            font-weight: 600;
-            color: var(--bs-dark);
-            margin-bottom: 1.5rem;
-        }
-        
-        .container {
-            max-width: 1400px;
-        }
-        
-        .modal-content {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-        }
-        
-        .modal-header {
-            border-bottom: 1px solid var(--bs-border);
-            padding: 1.5rem;
-        }
-        
-        .modal-body {
-            padding: 1.5rem;
-        }
-        
-        .modal-footer {
-            border-top: 1px solid var(--bs-border);
-            padding: 1.5rem;
-        }
-        
-        .form-control, .form-select {
-            border-radius: 0.75rem;
-            border: 1px solid var(--bs-border);
-            padding: 0.75rem 1rem;
-            transition: all 0.2s ease;
-        }
-        
-        .form-control:focus, .form-select:focus {
-            border-color: var(--bs-primary);
-            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.1);
-        }
-        
-        .form-check-input:checked {
-            background-color: var(--bs-primary);
-            border-color: var(--bs-primary);
-        }
-        
-        .alert {
-            border: none;
-            border-radius: 0.75rem;
-            padding: 1rem 1.25rem;
-        }
-        
-        .pagination .page-link {
-            border: none;
-            border-radius: 0.5rem;
-            margin: 0 0.25rem;
-            color: #666;
-            font-weight: 500;
-        }
-        
-        .pagination .page-item.active .page-link {
-            background-color: var(--bs-primary);
-            color: white;
-        }
-        
-        .pagination .page-link:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.1);
-            color: var(--bs-primary);
-        }
-        
         .empty-state {
             padding: 3rem 1rem;
             text-align: center;
@@ -598,27 +533,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             font-size: 3rem;
             margin-bottom: 1rem;
             opacity: 0.5;
-        }
-        
-        .dropdown-menu {
-            border: none;
-            border-radius: 0.75rem;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            padding: 0.5rem;
-        }
-        
-        .dropdown-item {
-            border-radius: 0.5rem;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-        
-        .dropdown-item:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.1);
-            color: var(--bs-primary);
-            transform: translateX(4px);
         }
         
         .budget-status {
@@ -664,42 +578,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             transition: all 0.2s ease;
         }
         
-        .budget-card {
-            background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
-            border-radius: 1rem;
-            padding: 1.5rem;
-            border: 1px solid var(--bs-border);
-            transition: all 0.3s ease;
-            position: relative;
-        }
-        
-        .budget-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-        }
-        
-        .budget-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 4px;
-            height: 100%;
-            border-radius: 1rem 0 0 1rem;
-        }
-        
-        .budget-card.safe::before {
-            background-color: var(--bs-success);
-        }
-        
-        .budget-card.warning::before {
-            background-color: var(--bs-warning);
-        }
-        
-        .budget-card.danger::before {
-            background-color: var(--bs-danger);
-        }
-        
         .restante-amount {
             font-size: 1.25rem;
             font-weight: 700;
@@ -718,71 +596,85 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             color: var(--bs-danger);
         }
         
-        .dropdown-toggle::after {
-            display: none;
+        .quick-actions .btn {
+            border-radius: 0.75rem;
+            padding: 1rem;
+            text-align: center;
+            transition: all 0.3s ease;
         }
         
-        .actions-dropdown {
+        .quick-actions .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
+        
+        .alert-budget {
+            border-left: 4px solid var(--bs-warning);
+            background: linear-gradient(135deg, #fff 0%, #fff9e6 100%);
+        }
+        
+        .alert-budget.danger {
+            border-left-color: var(--bs-danger);
+            background: linear-gradient(135deg, #fff 0%, #ffe6e6 100%);
+        }
+        
+        .budget-card {
+            transition: all 0.3s ease;
+            border: 1px solid transparent;
             position: relative;
+            overflow: hidden;
         }
         
-        .actions-dropdown .dropdown-menu {
-            min-width: 140px;
-        }
-        
-        .actions-dropdown .btn {
-            border: 1px solid var(--bs-border);
-        }
-        
-        .actions-dropdown .btn:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.05);
-            border-color: var(--bs-primary);
-        }
-        
-        /* CORRECCIÓN: Prevenir que el dropdown se cierre al hacer clic dentro */
-        .dropdown-menu form {
-            padding: 0;
-        }
-        
-        .dropdown-item.form-item {
-            padding: 0;
-        }
-        
-        .dropdown-item.form-item button {
+        .budget-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
             width: 100%;
-            text-align: left;
-            background: none;
-            border: none;
-            padding: 0.5rem 1rem;
+            height: 4px;
+        }
+        
+        .budget-card.safe::before {
+            background-color: var(--bs-success);
+        }
+        
+        .budget-card.warning::before {
+            background-color: var(--bs-warning);
+        }
+        
+        .budget-card.danger::before {
+            background-color: var(--bs-danger);
+        }
+        
+        .budget-card.expired::before {
+            background-color: var(--bs-secondary);
+        }
+        
+        .budget-card:hover {
+            border-color: var(--bs-border);
+            transform: translateY(-4px);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+        }
+        
+        .category-actions {
+            position: absolute;
+            top: 1rem;
+            right: 1rem;
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .budget-card:hover .category-actions {
+            opacity: 1;
         }
         
         @media (max-width: 768px) {
-            .container {
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }
-            
-            .table-responsive {
-                font-size: 0.875rem;
-            }
-            
-            .category-icon {
-                width: 40px;
-                height: 40px;
-                margin-right: 8px;
-            }
-            
             .stats-grid {
                 grid-template-columns: 1fr;
             }
             
-            .actions-dropdown .dropdown-menu {
-                position: fixed !important;
-                top: 50% !important;
-                left: 50% !important;
-                transform: translate(-50%, -50%) !important;
-                width: 90%;
-                max-width: 200px;
+            .category-actions {
+                opacity: 1;
             }
         }
     </style>
@@ -792,7 +684,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                Finzen
+                <i class="bi bi-wallet2 me-2"></i>Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -819,8 +711,14 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                             <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="reportes.php" class="nav-link">
+                            <i class="bi bi-graph-up me-2"></i>Reportes
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex align-items-center">
+                    <span class="text-muted me-3"><?= htmlspecialchars($_SESSION['username']) ?></span>
                     <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-box-arrow-right me-1"></i> Salir
                     </a>
@@ -858,6 +756,60 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             </div>
         <?php endif; ?>
 
+        <!-- Quick Actions -->
+        <div class="row g-3 mb-4 quick-actions">
+            <div class="col-md-3">
+                <a href="transacciones.php?action=new" class="btn btn-primary w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-plus-circle fs-2 mb-2"></i>
+                    <span>Nueva Transacción</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="presupuestos.php" class="btn btn-success w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-pie-chart fs-2 mb-2"></i>
+                    <span>Gestionar Presupuestos</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="reportes.php" class="btn btn-info w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-graph-up fs-2 mb-2"></i>
+                    <span>Ver Reportes</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-warning w-100 d-flex flex-column align-items-center" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+                    <i class="bi bi-tag fs-2 mb-2"></i>
+                    <span>Agregar Categoría</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Alertas de Presupuesto -->
+        <?php if (!empty($budgetAlerts)): ?>
+            <div class="card mb-4 border-warning">
+                <div class="card-body">
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-exclamation-triangle-fill text-warning me-2 fs-4"></i>
+                        <h5 class="mb-0">Alertas de Presupuesto</h5>
+                    </div>
+                    <?php foreach ($budgetAlerts as $alert): ?>
+                        <div class="alert alert-budget <?= $alert['porcentaje_uso'] > 100 ? 'danger' : '' ?> d-flex align-items-center mb-2">
+                            <div class="flex-grow-1">
+                                <strong><?= htmlspecialchars($alert['categoria_nombre']) ?></strong> - 
+                                <?= round($alert['porcentaje_uso']) ?>% usado 
+                                (<?= formatMoney($alert['gastos_actuales'], $user_currency) ?> de <?= formatMoney($alert['monto'], $user_currency) ?>)
+                            </div>
+                            <?php if ($alert['porcentaje_uso'] > 100): ?>
+                                <span class="badge bg-danger">Excedido</span>
+                            <?php else: ?>
+                                <span class="badge bg-warning">Cerca del límite</span>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        <?php endif; ?>
+
         <!-- Estadísticas Mejoradas -->
         <div class="stats-grid">
             <div class="stat-card primary">
@@ -865,6 +817,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                     <div>
                         <div class="stat-value text-primary"><?= $stats['total_presupuestos'] ?></div>
                         <div class="stat-label">Total Presupuestos</div>
+                        <small class="text-muted"><?= $stats['presupuestos_activos'] ?> activos</small>
                     </div>
                     <div class="stat-icon bg-primary bg-opacity-10 text-primary">
                         <i class="bi bi-pie-chart"></i>
@@ -875,8 +828,9 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             <div class="stat-card success">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <div class="stat-value text-success"><?= formatMoney($stats['total_presupuestado']) ?></div>
+                        <div class="stat-value text-success"><?= formatMoney($stats['total_presupuestado'], $user_currency) ?></div>
                         <div class="stat-label">Total Presupuestado</div>
+                        <small class="text-muted">Presupuesto asignado</small>
                     </div>
                     <div class="stat-icon bg-success bg-opacity-10 text-success">
                         <i class="bi bi-cash-coin"></i>
@@ -887,11 +841,25 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             <div class="stat-card danger">
                 <div class="d-flex justify-content-between align-items-center">
                     <div>
-                        <div class="stat-value text-danger"><?= formatMoney($stats['total_gastado']) ?></div>
+                        <div class="stat-value text-danger"><?= formatMoney($stats['total_gastado'], $user_currency) ?></div>
                         <div class="stat-label">Total Gastado</div>
+                        <small class="text-muted">De presupuestos activos</small>
                     </div>
                     <div class="stat-icon bg-danger bg-opacity-10 text-danger">
                         <i class="bi bi-graph-up-arrow"></i>
+                    </div>
+                </div>
+            </div>
+
+            <div class="stat-card warning">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <div class="stat-value text-warning"><?= $stats['presupuestos_expirados'] ?></div>
+                        <div class="stat-label">Presupuestos Expirados</div>
+                        <small class="text-muted">Necesitan renovación</small>
+                    </div>
+                    <div class="stat-icon bg-warning bg-opacity-10 text-warning">
+                        <i class="bi bi-clock-history"></i>
                     </div>
                 </div>
             </div>
@@ -924,23 +892,23 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                         </select>
                     </div>
                     <div class="col-md-3">
-                        <label for="notificacion" class="form-label">Notificación</label>
-                        <select class="form-select" id="notificacion" name="notificacion">
-                            <option value="">Todos</option>
-                            <option value="1" <?= ($filters['notificacion'] === 1) ? 'selected' : '' ?>>Con notificación</option>
-                            <option value="0" <?= ($filters['notificacion'] === 0) ? 'selected' : '' ?>>Sin notificación</option>
+                        <label for="estado" class="form-label">Estado</label>
+                        <select class="form-select" id="estado" name="estado">
+                            <option value="">Todos los estados</option>
+                            <option value="activo" <?= ($filters['estado'] === 'activo') ? 'selected' : '' ?>>Activos</option>
+                            <option value="expirado" <?= ($filters['estado'] === 'expirado') ? 'selected' : '' ?>>Expirados</option>
                         </select>
                     </div>
                     <div class="col-md-3 text-md-end">
                         <span class="badge bg-primary badge-custom">
-                            <?= $totalPresupuestos ?> presupuesto<?= $totalPresupuestos !== 1 ? 's' : '' ?> encontrado<?= $totalPresupuestos !== 1 ? 's' : '' ?>
+                            <?= $totalPresupuestos ?> presupuesto<?= $totalPresupuestos !== 1 ? 's' : '' ?>
                         </span>
                     </div>
                 </div>
             </form>
         </div>
 
-        <!-- Lista de presupuestos mejorada -->
+        <!-- Lista de presupuestos en cards -->
         <div class="card">
             <div class="card-body">
                 <?php if (empty($presupuestos)): ?>
@@ -953,103 +921,32 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                         </button>
                     </div>
                 <?php else: ?>
-                    <div class="table-responsive">
-                        <table class="table table-hover align-middle">
-                            <thead class="table-light">
-                                <tr>
-                                    <th>Categoría</th>
-                                    <th>Presupuesto</th>
-                                    <th>Gastado</th>
-                                    <th>Progreso</th>
-                                    <th>Período</th>
-                                    <th>Vigencia</th>
-                                    <th>Notificación</th>
-                                    <th class="text-end">Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($presupuestos as $presupuesto):
-                                    $progreso = $presupuesto["monto"] > 0 ? min(100, ($presupuesto["gastos_actuales"] / $presupuesto["monto"]) * 100) : 0;
-                                    $progresoClase = $progreso > 90 ? 'progress-danger' :
-                                                    ($progreso > 70 ? 'progress-warning' : 'progress-success');
-                                    $statusClase = $progreso > 90 ? 'status-danger' :
-                                                 ($progreso > 70 ? 'status-warning' : 'status-safe');
-                                    $restante = $presupuesto["monto"] - $presupuesto["gastos_actuales"];
-                                    $restanteClase = $progreso > 90 ? 'restante-danger' :
-                                                   ($progreso > 70 ? 'restante-warning' : 'restante-safe');
-                                ?>
-                                <tr>
-                                    <td>
-                                        <div class="d-flex align-items-center">
-                                            <?php if (!empty($presupuesto['categoria_color'])): ?>
-                                                <span class="category-icon" style="background-color: <?= htmlspecialchars($presupuesto['categoria_color']) ?>">
-                                                    <i class="bi bi-tag"></i>
-                                                </span>
-                                            <?php endif; ?>
-                                            <div>
-                                                <strong><?= htmlspecialchars($presupuesto["categoria_nombre"]) ?></strong>
-                                                <br>
-                                                <span class="restante-amount <?= $restanteClase ?>">
-                                                    <?= formatMoney($restante) ?>
-                                                </span>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="fw-bold h5"><?= formatMoney($presupuesto["monto"]) ?></span>
-                                    </td>
-                                    <td>
-                                        <div class="budget-status">
-                                            <span class="status-indicator <?= $statusClase ?>"></span>
-                                            <span class="<?= $presupuesto["gastos_actuales"] > 0 ? 'text-danger fw-bold' : 'text-muted' ?>">
-                                                <?= formatMoney($presupuesto["gastos_actuales"]) ?>
-                                            </span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <div class="progress-container">
-                                            <div class="progress-bar <?= $progresoClase ?>" style="width: <?= $progreso ?>%">
-                                                <span class="visually-hidden"><?= round($progreso) ?>%</span>
-                                            </div>
-                                            <span class="progress-percentage"><?= round($progreso) ?>%</span>
-                                        </div>
-                                    </td>
-                                    <td>
-                                        <span class="badge bg-primary badge-custom">
-                                            <?= htmlspecialchars($periodos[$presupuesto["periodo"]] ?? $presupuesto["periodo"]) ?>
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <small>
-                                            <strong><?= date("d/m/Y", strtotime($presupuesto["fecha_inicio"])) ?></strong>
-                                            <?php if ($presupuesto["fecha_fin"]): ?>
-                                                <br>al <?= date("d/m/Y", strtotime($presupuesto["fecha_fin"])) ?>
-                                            <?php else: ?>
-                                                <br><span class="text-muted">Sin fecha fin</span>
-                                            <?php endif; ?>
-                                        </small>
-                                    </td>
-                                    <td>
-                                        <?php if ($presupuesto["notificacion"]): ?>
-                                            <span class="badge bg-success badge-custom">
-                                                <i class="bi bi-bell-fill me-1"></i> Activa
-                                            </span>
-                                        <?php else: ?>
-                                            <span class="badge bg-secondary badge-custom">
-                                                <i class="bi bi-bell-slash me-1"></i> Inactiva
-                                            </span>
-                                        <?php endif; ?>
-                                    </td>
-                                    <td class="text-end">
-                                        <div class="dropdown actions-dropdown">
-                                            <button class="btn btn-sm btn-outline-secondary btn-action dropdown-toggle" type="button" 
-                                                    data-bs-toggle="dropdown" data-bs-auto-close="outside" 
-                                                    aria-expanded="false">
+                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
+                        <?php foreach ($presupuestos as $presupuesto):
+                            $progreso = $presupuesto["monto"] > 0 ? min(100, ($presupuesto["gastos_actuales"] / $presupuesto["monto"]) * 100) : 0;
+                            $progresoClase = $progreso > 90 ? 'progress-danger' :
+                                            ($progreso > 70 ? 'progress-warning' : 'progress-success');
+                            $statusClase = $progreso > 90 ? 'status-danger' :
+                                         ($progreso > 70 ? 'status-warning' : 'status-safe');
+                            $restante = $presupuesto["monto"] - $presupuesto["gastos_actuales"];
+                            $restanteClase = $progreso > 90 ? 'restante-danger' :
+                                           ($progreso > 70 ? 'restante-warning' : 'restante-safe');
+                            
+                            // Determinar si el presupuesto está expirado
+                            $isExpired = $presupuesto["fecha_fin"] && strtotime($presupuesto["fecha_fin"]) < time();
+                            $cardClass = $isExpired ? 'expired' : ($progreso > 90 ? 'danger' : ($progreso > 70 ? 'warning' : 'safe'));
+                        ?>
+                        <div class="col">
+                            <div class="card budget-card h-100 <?= $cardClass ?>">
+                                <div class="card-body">
+                                    <div class="category-actions">
+                                        <div class="dropdown">
+                                            <button class="btn btn-sm btn-outline-secondary btn-action" type="button" data-bs-toggle="dropdown">
                                                 <i class="bi bi-three-dots-vertical"></i>
                                             </button>
-                                            <ul class="dropdown-menu dropdown-menu-end">
+                                            <ul class="dropdown-menu">
                                                 <li>
-                                                    <button class="dropdown-item edit-btn" type="button"
+                                                    <button class="dropdown-item edit-btn"
                                                             data-bs-toggle="modal"
                                                             data-bs-target="#editBudgetModal"
                                                             data-id="<?= $presupuesto["id"] ?>"
@@ -1062,21 +959,75 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                                                         <i class="bi bi-pencil me-2"></i> Editar
                                                     </button>
                                                 </li>
-                                                <li><hr class="dropdown-divider"></li>
                                                 <li>
                                                     <a class="dropdown-item text-danger" 
-                                                       href="?delete=<?= $presupuesto["id"] ?>&page=<?= $page ?>&categoria_id=<?= $filters['categoria_id'] ?>&periodo=<?= $filters['periodo'] ?>&notificacion=<?= $filters['notificacion'] ?>"
+                                                       href="?<?= http_build_query(array_merge($_GET, ['delete' => $presupuesto["id"]])) ?>"
                                                        onclick="return confirm('¿Estás seguro de eliminar este presupuesto?\n\nEsta acción no se puede deshacer.')">
                                                         <i class="bi bi-trash me-2"></i> Eliminar
                                                     </a>
                                                 </li>
                                             </ul>
                                         </div>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
+                                    </div>
+                                    
+                                    <div class="text-center mb-3">
+                                        <div class="category-icon" style="background-color: <?= htmlspecialchars($presupuesto['categoria_color']) ?>">
+                                            <i class="bi <?= htmlspecialchars($presupuesto['categoria_icono'] ?? 'bi-tag') ?>"></i>
+                                        </div>
+                                        <h5 class="card-title mb-2"><?= htmlspecialchars($presupuesto["categoria_nombre"]) ?></h5>
+                                        <div class="mb-2">
+                                            <span class="badge <?= $presupuesto["periodo"] === 'anual' ? 'bg-info' : 'bg-primary' ?> badge-custom">
+                                                <?= htmlspecialchars($periodos[$presupuesto["periodo"]] ?? $presupuesto["periodo"]) ?>
+                                            </span>
+                                            <?php if ($isExpired): ?>
+                                                <span class="badge bg-secondary badge-custom">Expirado</span>
+                                            <?php endif; ?>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="text-center mb-3">
+                                        <div class="h4 fw-bold text-primary"><?= formatMoney($presupuesto["monto"], $user_currency) ?></div>
+                                        <small class="text-muted">Presupuesto total</small>
+                                    </div>
+                                    
+                                    <div class="mb-3">
+                                        <div class="d-flex justify-content-between mb-1">
+                                            <small class="text-muted">Gastado: <?= formatMoney($presupuesto["gastos_actuales"], $user_currency) ?></small>
+                                            <small class="fw-bold"><?= round($progreso) ?>%</small>
+                                        </div>
+                                        <div class="progress-container">
+                                            <div class="progress-bar <?= $progresoClase ?>" style="width: <?= $progreso ?>%"></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="text-center">
+                                        <div class="restante-amount <?= $restanteClase ?>">
+                                            <?= formatMoney($restante, $user_currency) ?>
+                                        </div>
+                                        <small class="text-muted">Restante</small>
+                                    </div>
+                                    
+                                    <div class="text-center mt-3">
+                                        <small class="text-muted">
+                                            <i class="bi bi-calendar me-1"></i>
+                                            <?= date("d/m/Y", strtotime($presupuesto["fecha_inicio"])) ?>
+                                            <?php if ($presupuesto["fecha_fin"]): ?>
+                                                - <?= date("d/m/Y", strtotime($presupuesto["fecha_fin"])) ?>
+                                            <?php else: ?>
+                                                (Sin fecha fin)
+                                            <?php endif; ?>
+                                        </small>
+                                        <?php if ($presupuesto["notificacion"]): ?>
+                                            <br>
+                                            <span class="badge bg-success badge-custom mt-1">
+                                                <i class="bi bi-bell-fill me-1"></i> Notificaciones
+                                            </span>
+                                        <?php endif; ?>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <?php endforeach; ?>
                     </div>
 
                     <!-- Paginación -->
@@ -1085,7 +1036,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                         <ul class="pagination justify-content-center">
                             <?php if ($page > 1): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page - 1 ?>&categoria_id=<?= $filters['categoria_id'] ?>&periodo=<?= $filters['periodo'] ?>&notificacion=<?= $filters['notificacion'] ?>" aria-label="Anterior">
+                                    <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>" aria-label="Anterior">
                                         <span aria-hidden="true">&laquo;</span>
                                     </a>
                                 </li>
@@ -1093,7 +1044,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
 
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                 <li class="page-item <?= $i === $page ? 'active' : '' ?>">
-                                    <a class="page-link" href="?page=<?= $i ?>&categoria_id=<?= $filters['categoria_id'] ?>&periodo=<?= $filters['periodo'] ?>&notificacion=<?= $filters['notificacion'] ?>">
+                                    <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $i])) ?>">
                                         <?= $i ?>
                                     </a>
                                 </li>
@@ -1101,7 +1052,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
 
                             <?php if ($page < $totalPages): ?>
                                 <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page + 1 ?>&categoria_id=<?= $filters['categoria_id'] ?>&periodo=<?= $filters['periodo'] ?>&notificacion=<?= $filters['notificacion'] ?>" aria-label="Siguiente">
+                                    <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>" aria-label="Siguiente">
                                         <span aria-hidden="true">&raquo;</span>
                                     </a>
                                 </li>
@@ -1138,9 +1089,9 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                             <small class="text-muted">Solo se muestran categorías de gastos</small>
                         </div>
                         <div class="mb-3">
-                            <label for="add_monto" class="form-label">Monto Presupuestado (Guaraníes)</label>
+                            <label for="add_monto" class="form-label">Monto Presupuestado (<?= $user_currency ?>)</label>
                             <input type="text" class="form-control" id="add_monto" name="monto" placeholder="Ej: 1.000.000" required>
-                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
+                            <small class="text-muted">Ingrese el monto. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="add_periodo" class="form-label">Período</label>
@@ -1165,7 +1116,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                         <div class="form-check form-switch mb-3">
                             <input class="form-check-input" type="checkbox" id="add_notificacion" name="notificacion" checked>
                             <label class="form-check-label" for="add_notificacion">
-                                Activar notificaciones cuando se acerque al límite
+                                <i class="bi bi-bell me-1"></i>Activar notificaciones cuando se acerque al límite
                             </label>
                         </div>
                     </div>
@@ -1204,9 +1155,9 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                             </select>
                         </div>
                         <div class="mb-3">
-                            <label for="edit_monto" class="form-label">Monto Presupuestado (Guaraníes)</label>
+                            <label for="edit_monto" class="form-label">Monto Presupuestado (<?= $user_currency ?>)</label>
                             <input type="text" class="form-control" id="edit_monto" name="monto" required>
-                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
+                            <small class="text-muted">Ingrese el monto. Use puntos para separar miles.</small>
                         </div>
                         <div class="mb-3">
                             <label for="edit_periodo" class="form-label">Período</label>
@@ -1231,7 +1182,7 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                         <div class="form-check form-switch mb-3">
                             <input class="form-check-input" type="checkbox" id="edit_notificacion" name="notificacion">
                             <label class="form-check-label" for="edit_notificacion">
-                                Activar notificaciones cuando se acerque al límite
+                                <i class="bi bi-bell me-1"></i>Activar notificaciones cuando se acerque al límite
                             </label>
                         </div>
                     </div>
@@ -1265,15 +1216,6 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
                     document.getElementById('edit_fecha_inicio').value = this.dataset.fecha_inicio;
                     document.getElementById('edit_fecha_fin').value = this.dataset.fecha_fin || '';
                     document.getElementById('edit_notificacion').checked = this.dataset.notificacion === '1';
-                    
-                    // Cerrar el dropdown después de hacer clic en editar
-                    const dropdown = this.closest('.dropdown');
-                    if (dropdown) {
-                        const dropdownInstance = bootstrap.Dropdown.getInstance(dropdown.querySelector('.dropdown-toggle'));
-                        if (dropdownInstance) {
-                            dropdownInstance.hide();
-                        }
-                    }
                 });
             });
 
@@ -1319,25 +1261,9 @@ $stats = $budgetRepo->getTotalStats($usuario_id);
             });
 
             // Auto-submit de filtros
-            document.querySelectorAll('#categoria_id, #periodo, #notificacion').forEach(select => {
+            document.querySelectorAll('#categoria_id, #periodo, #estado').forEach(select => {
                 select.addEventListener('change', function() {
                     document.getElementById('filtersForm').submit();
-                });
-            });
-
-            // CORRECCIÓN: Prevenir que el dropdown se cierre al hacer clic en los botones de edición
-            document.querySelectorAll('.actions-dropdown .dropdown-menu').forEach(menu => {
-                menu.addEventListener('click', function(e) {
-                    e.stopPropagation();
-                });
-            });
-
-            // CORRECCIÓN: Prevenir que el dropdown se cierre cuando se hace clic en los elementos del dropdown
-            document.querySelectorAll('.dropdown-item').forEach(item => {
-                item.addEventListener('click', function(e) {
-                    if (!this.classList.contains('edit-btn')) {
-                        e.stopPropagation();
-                    }
                 });
             });
         });
