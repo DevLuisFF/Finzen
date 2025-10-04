@@ -1,14 +1,14 @@
 <?php
 session_start();
 if (!isset($_SESSION['user_id'])) {
-    header("Location: ../auth/login.php");
+    header("Location: ../index.php");
     exit();
 }
 require "../config/database.php";
 $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION['user_id'];
 
-// Clase base para métricas
+// Clase base para métricas adaptada al esquema actual
 abstract class MetricCalculator {
     protected $db;
     public function __construct($db) {
@@ -17,28 +17,16 @@ abstract class MetricCalculator {
     abstract public function calculate($userId);
 }
 
-// Métricas específicas mejoradas según esquema
-class TotalAccountsMetric extends MetricCalculator {
-    public function calculate($userId) {
-        $stmt = $this->db->prepare("
-            SELECT COUNT(*) 
-            FROM cuentas 
-            WHERE usuario_id = ? AND activa = TRUE
-        ");
-        $stmt->execute([$userId]);
-        return $stmt->fetchColumn() ?? 0;
-    }
-}
-
+// Métricas específicas para el esquema actual
 class TotalBalanceMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
-            SELECT COALESCE(SUM(saldo), 0) 
-            FROM cuentas 
-            WHERE usuario_id = ? AND activa = TRUE
+            SELECT saldo 
+            FROM usuarios 
+            WHERE id = ?
         ");
         $stmt->execute([$userId]);
-        return $stmt->fetchColumn();
+        return $stmt->fetchColumn() ?? 0;
     }
 }
 
@@ -50,10 +38,8 @@ class IncomeExpenseMetric extends MetricCalculator {
                 COALESCE(SUM(t.monto), 0) as total
             FROM transacciones t
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? 
+            WHERE t.usuario_id = ? 
             AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)
-            AND c.activa = TRUE
             GROUP BY cat.tipo
         ");
         $stmt->execute([$userId]);
@@ -77,16 +63,15 @@ class RecentTransactionsMetric extends MetricCalculator {
                 t.descripcion,
                 t.monto,
                 t.fecha,
-                c.nombre as cuenta,
                 cat.nombre as categoria,
                 cat.tipo,
                 cat.color,
-                c.moneda
+                cat.icono,
+                u.moneda
             FROM transacciones t
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            WHERE c.usuario_id = ?
-            AND c.activa = TRUE
+            INNER JOIN usuarios u ON t.usuario_id = u.id
+            WHERE t.usuario_id = ?
             ORDER BY t.fecha DESC, t.creado_en DESC
             LIMIT 5
         ");
@@ -104,10 +89,8 @@ class MonthlyFlowMetric extends MetricCalculator {
                 COALESCE(SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) as gastos
             FROM transacciones t
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? 
+            WHERE t.usuario_id = ? 
             AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 6 MONTH)
-            AND c.activa = TRUE
             GROUP BY mes
             ORDER BY mes ASC
         ");
@@ -128,30 +111,29 @@ class ExpenseByCategoryMetric extends MetricCalculator {
             SELECT 
                 cat.nombre,
                 COALESCE(SUM(t.monto), 0) as total,
-                COALESCE(cat.color, '#6c757d') as color
+                COALESCE(cat.color, '#6c757d') as color,
+                cat.icono
             FROM transacciones t
             INNER JOIN categorias cat ON t.categoria_id = cat.id
-            INNER JOIN cuentas c ON t.cuenta_id = c.id
-            WHERE c.usuario_id = ? 
+            WHERE t.usuario_id = ? 
             AND cat.tipo = 'gasto' 
             AND t.fecha >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH)
-            AND c.activa = TRUE
-            GROUP BY cat.id, cat.nombre, cat.color
+            GROUP BY cat.id, cat.nombre, cat.color, cat.icono
             ORDER BY total DESC
             LIMIT 6
         ");
         $stmt->execute([$userId]);
-        $data = ['labels' => [], 'data' => [], 'colors' => []];
+        $data = ['labels' => [], 'data' => [], 'colors' => [], 'icons' => []];
         while ($cat = $stmt->fetch(PDO::FETCH_ASSOC)) {
             $data['labels'][] = htmlspecialchars($cat['nombre']);
             $data['data'][] = abs((int)$cat['total']);
             $data['colors'][] = $cat['color'];
+            $data['icons'][] = $cat['icono'];
         }
         return $data;
     }
 }
 
-// Nueva métrica: Presupuestos activos
 class ActiveBudgetsMetric extends MetricCalculator {
     public function calculate($userId) {
         $stmt = $this->db->prepare("
@@ -165,12 +147,75 @@ class ActiveBudgetsMetric extends MetricCalculator {
     }
 }
 
+class CategoriesCountMetric extends MetricCalculator {
+    public function calculate($userId) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) 
+            FROM categorias 
+            WHERE usuario_id = ?
+        ");
+        $stmt->execute([$userId]);
+        return $stmt->fetchColumn() ?? 0;
+    }
+}
+
+class BudgetAlertsMetric extends MetricCalculator {
+    public function calculate($userId) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) 
+            FROM presupuestos p
+            INNER JOIN (
+                SELECT 
+                    categoria_id,
+                    COALESCE(SUM(monto), 0) as gasto_actual
+                FROM transacciones t
+                INNER JOIN categorias c ON t.categoria_id = c.id
+                WHERE t.usuario_id = ?
+                AND c.tipo = 'gasto'
+                AND t.fecha BETWEEN DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND CURDATE()
+                GROUP BY categoria_id
+            ) g ON p.categoria_id = g.categoria_id
+            WHERE p.usuario_id = ?
+            AND (g.gasto_actual / p.monto) >= 0.8
+            AND (g.gasto_actual / p.monto) < 1.0
+        ");
+        $stmt->execute([$userId, $userId]);
+        return $stmt->fetchColumn() ?? 0;
+    }
+}
+
+class OverBudgetMetric extends MetricCalculator {
+    public function calculate($userId) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) 
+            FROM presupuestos p
+            INNER JOIN (
+                SELECT 
+                    categoria_id,
+                    COALESCE(SUM(monto), 0) as gasto_actual
+                FROM transacciones t
+                INNER JOIN categorias c ON t.categoria_id = c.id
+                WHERE t.usuario_id = ?
+                AND c.tipo = 'gasto'
+                AND t.fecha BETWEEN DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND CURDATE()
+                GROUP BY categoria_id
+            ) g ON p.categoria_id = g.categoria_id
+            WHERE p.usuario_id = ?
+            AND g.gasto_actual > p.monto
+        ");
+        $stmt->execute([$userId, $userId]);
+        return $stmt->fetchColumn() ?? 0;
+    }
+}
+
 // Obtener métricas
 try {
     $metrics = [
-        'total_cuentas' => (new TotalAccountsMetric($db))->calculate($usuario_id),
         'saldo_total' => (new TotalBalanceMetric($db))->calculate($usuario_id),
+        'total_categorias' => (new CategoriesCountMetric($db))->calculate($usuario_id),
         'presupuestos_activos' => (new ActiveBudgetsMetric($db))->calculate($usuario_id),
+        'alertas_presupuesto' => (new BudgetAlertsMetric($db))->calculate($usuario_id),
+        'presupuestos_excedidos' => (new OverBudgetMetric($db))->calculate($usuario_id),
     ];
     
     $incomeExpense = (new IncomeExpenseMetric($db))->calculate($usuario_id);
@@ -179,22 +224,30 @@ try {
     $monthlyFlow = (new MonthlyFlowMetric($db))->calculate($usuario_id);
     $expenseByCategory = (new ExpenseByCategoryMetric($db))->calculate($usuario_id);
     
+    // Obtener información del usuario para la moneda
+    $stmt = $db->prepare("SELECT moneda FROM usuarios WHERE id = ?");
+    $stmt->execute([$usuario_id]);
+    $user_currency = $stmt->fetchColumn();
+    
 } catch (Exception $e) {
     error_log("Error en dashboard: " . $e->getMessage());
     // Valores por defecto en caso de error
     $metrics = [
-        'total_cuentas' => 0,
         'saldo_total' => 0,
+        'total_categorias' => 0,
         'presupuestos_activos' => 0,
+        'alertas_presupuesto' => 0,
+        'presupuestos_excedidos' => 0,
         'ingresos' => 0,
         'gastos' => 0
     ];
     $recentTransactions = [];
     $monthlyFlow = ['labels' => [], 'ingresos' => [], 'gastos' => []];
-    $expenseByCategory = ['labels' => [], 'data' => [], 'colors' => []];
+    $expenseByCategory = ['labels' => [], 'data' => [], 'colors' => [], 'icons' => []];
+    $user_currency = 'PYG';
 }
 
-// Función para formatear dinero mejorada
+// Función para formatear dinero
 function formatMoney($amount, $moneda = 'PYG') {
     $symbols = [
         'PYG' => 'Gs ',
@@ -205,25 +258,14 @@ function formatMoney($amount, $moneda = 'PYG') {
     return $symbol . number_format($amount / 100, 0, ',', '.');
 }
 
-// Función para exportar datos a CSV
-function exportToCSV($data, $filename) {
-    header('Content-Type: text/csv; charset=utf-8');
-    header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
-    
-    $output = fopen('php://output', 'w');
-    
-    // Escribir encabezados
-    if (!empty($data)) {
-        fputcsv($output, array_keys($data[0]));
-        
-        // Escribir datos
-        foreach ($data as $row) {
-            fputcsv($output, $row);
-        }
+// Función para obtener el icono de Bootstrap
+function getBootstrapIcon($iconName) {
+    // Si el icono ya incluye 'bi-', usarlo directamente
+    if (strpos($iconName, 'bi-') === 0) {
+        return $iconName;
     }
-    
-    fclose($output);
-    exit();
+    // Si no, agregar 'bi-' como prefijo
+    return 'bi-' . $iconName;
 }
 
 // Manejar exportación de transacciones
@@ -234,13 +276,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             t.descripcion,
             cat.nombre as categoria,
             cat.tipo,
-            c.nombre as cuenta,
             t.monto,
-            c.moneda
+            u.moneda
         FROM transacciones t
-        INNER JOIN cuentas c ON t.cuenta_id = c.id
         INNER JOIN categorias cat ON t.categoria_id = cat.id
-        WHERE c.usuario_id = ?
+        INNER JOIN usuarios u ON t.usuario_id = u.id
+        WHERE t.usuario_id = ?
         ORDER BY t.fecha DESC
     ");
     $stmt->execute([$usuario_id]);
@@ -252,7 +293,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
         unset($row['moneda']);
     }
     
-    exportToCSV($exportData, 'transacciones_' . date('Y-m-d'));
+    header('Content-Type: text/csv; charset=utf-8');
+    header('Content-Disposition: attachment; filename="transacciones_' . date('Y-m-d') . '.csv"');
+    
+    $output = fopen('php://output', 'w');
+    
+    // Escribir encabezados
+    if (!empty($exportData)) {
+        fputcsv($output, array_keys($exportData[0]));
+        
+        // Escribir datos
+        foreach ($exportData as $row) {
+            fputcsv($output, $row);
+        }
+    }
+    
+    fclose($output);
+    exit();
 }
 ?>
 <!DOCTYPE html>
@@ -422,64 +479,12 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             font-size: 0.875rem;
         }
         
-        .table {
-            border-radius: 1rem;
-            overflow: hidden;
+        .alert-warning {
+            border-left: 4px solid var(--bs-warning);
         }
         
-        .table th {
-            border: none;
-            background-color: var(--bs-light);
-            font-weight: 600;
-            color: #495057;
-            padding: 1rem;
-            font-size: 0.875rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .table td {
-            border: none;
-            padding: 1rem;
-            vertical-align: middle;
-        }
-        
-        .table tbody tr {
-            border-bottom: 1px solid var(--bs-border);
-        }
-        
-        .table tbody tr:last-child {
-            border-bottom: none;
-        }
-        
-        h1, h2, h3, h4, h5, h6 {
-            font-weight: 700;
-            color: var(--bs-dark);
-        }
-        
-        .card-title {
-            font-weight: 600;
-            color: var(--bs-dark);
-            margin-bottom: 1.5rem;
-        }
-        
-        .container {
-            max-width: 1400px;
-        }
-        
-        @media (max-width: 768px) {
-            .chart-container {
-                height: 250px;
-            }
-            
-            .metric-value {
-                font-size: 1.5rem;
-            }
-            
-            .container {
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }
+        .alert-danger {
+            border-left: 4px solid var(--bs-danger);
         }
         
         .empty-state {
@@ -493,6 +498,18 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             margin-bottom: 1rem;
             opacity: 0.5;
         }
+        
+        .quick-actions .btn {
+            border-radius: 0.75rem;
+            padding: 1rem;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .quick-actions .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
+        }
     </style>
 </head>
 <body>
@@ -500,7 +517,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                Finzen
+                <i class="bi bi-wallet2 me-2"></i>Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -527,10 +544,16 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                             <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="reportes.php" class="nav-link">
+                            <i class="bi bi-graph-up me-2"></i>Reportes
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted me-3"><?= htmlspecialchars($_SESSION['username']) ?></span>
                     <a href="?export=transacciones" class="btn btn-outline-success btn-sm">
-                        <i class="bi bi-download me-1"></i> Exportar CSV
+                        <i class="bi bi-download me-1"></i> Exportar
                     </a>
                     <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-box-arrow-right me-1"></i> Salir
@@ -543,9 +566,58 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     <!-- Main Content -->
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
-            <h1 class="mb-0">Dashboard</h1>
+            <h1 class="mb-0">Resumen Financiero</h1>
             <div class="text-muted">
                 <?= date('d M Y') ?>
+            </div>
+        </div>
+
+        <!-- Alertas de Presupuesto -->
+        <?php if ($metrics['presupuestos_excedidos'] > 0): ?>
+        <div class="alert alert-danger d-flex align-items-center mb-4">
+            <i class="bi bi-exclamation-triangle-fill me-2 fs-5"></i>
+            <div>
+                <strong>¡Alerta!</strong> Tienes <?= $metrics['presupuestos_excedidos'] ?> presupuesto(s) excedido(s). 
+                <a href="presupuestos.php" class="alert-link">Revisar ahora</a>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <?php if ($metrics['alertas_presupuesto'] > 0): ?>
+        <div class="alert alert-warning d-flex align-items-center mb-4">
+            <i class="bi bi-info-circle-fill me-2 fs-5"></i>
+            <div>
+                <strong>Atención:</strong> Tienes <?= $metrics['alertas_presupuesto'] ?> presupuesto(s) cerca del límite (80% o más).
+                <a href="presupuestos.php" class="alert-link">Ver detalles</a>
+            </div>
+        </div>
+        <?php endif; ?>
+
+        <!-- Quick Actions -->
+        <div class="row g-3 mb-4 quick-actions">
+            <div class="col-md-3">
+                <a href="transacciones.php?action=new" class="btn btn-primary w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-plus-circle fs-2 mb-2"></i>
+                    <span>Nueva Transacción</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="categorias.php" class="btn btn-success w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-tag fs-2 mb-2"></i>
+                    <span>Gestionar Categorías</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="presupuestos.php" class="btn btn-info w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-pie-chart fs-2 mb-2"></i>
+                    <span>Presupuestos</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <a href="reportes.php" class="btn btn-warning w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-graph-up fs-2 mb-2"></i>
+                    <span>Reportes</span>
+                </a>
             </div>
         </div>
 
@@ -556,11 +628,11 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     <div class="card-body">
                         <div class="d-flex align-items-center">
                             <div class="metric-icon bg-primary bg-opacity-10 text-primary">
-                                <i class="bi bi-wallet2"></i>
+                                <i class="bi bi-cash-stack"></i>
                             </div>
                             <div>
-                                <div class="metric-label">Cuentas activas</div>
-                                <div class="metric-value"><?= htmlspecialchars($metrics['total_cuentas']) ?></div>
+                                <div class="metric-label">Saldo Total</div>
+                                <div class="metric-value"><?= formatMoney($metrics['saldo_total'], $user_currency) ?></div>
                             </div>
                         </div>
                     </div>
@@ -571,26 +643,26 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     <div class="card-body">
                         <div class="d-flex align-items-center">
                             <div class="metric-icon bg-success bg-opacity-10 text-success">
-                                <i class="bi bi-cash-stack"></i>
+                                <i class="bi bi-arrow-up-circle"></i>
                             </div>
                             <div>
-                                <div class="metric-label">Saldo total</div>
-                                <div class="metric-value"><?= formatMoney($metrics['saldo_total']) ?></div>
+                                <div class="metric-label">Ingresos Mensuales</div>
+                                <div class="metric-value"><?= formatMoney($metrics['ingresos'], $user_currency) ?></div>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
             <div class="col-md-6 col-lg-3">
-                <div class="card metric-card info">
+                <div class="card metric-card danger">
                     <div class="card-body">
                         <div class="d-flex align-items-center">
-                            <div class="metric-icon bg-info bg-opacity-10 text-info">
-                                <i class="bi bi-pie-chart"></i>
+                            <div class="metric-icon bg-danger bg-opacity-10 text-danger">
+                                <i class="bi bi-arrow-down-circle"></i>
                             </div>
                             <div>
-                                <div class="metric-label">Presupuestos activos</div>
-                                <div class="metric-value"><?= htmlspecialchars($metrics['presupuestos_activos']) ?></div>
+                                <div class="metric-label">Gastos Mensuales</div>
+                                <div class="metric-value"><?= formatMoney($metrics['gastos'], $user_currency) ?></div>
                             </div>
                         </div>
                     </div>
@@ -604,10 +676,59 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                 <i class="bi bi-graph-up"></i>
                             </div>
                             <div>
-                                <div class="metric-label">Balance mensual</div>
+                                <div class="metric-label">Balance Mensual</div>
                                 <div class="metric-value <?= ($metrics['ingresos'] - $metrics['gastos']) >= 0 ? 'text-success' : 'text-danger' ?>">
-                                    <?= formatMoney($metrics['ingresos'] - $metrics['gastos']) ?>
+                                    <?= formatMoney($metrics['ingresos'] - $metrics['gastos'], $user_currency) ?>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Second Metrics Row -->
+        <div class="row g-4 mb-4">
+            <div class="col-md-4">
+                <div class="card metric-card info">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon bg-info bg-opacity-10 text-info">
+                                <i class="bi bi-tags"></i>
+                            </div>
+                            <div>
+                                <div class="metric-label">Total Categorías</div>
+                                <div class="metric-value"><?= htmlspecialchars($metrics['total_categorias']) ?></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card metric-card warning">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon bg-warning bg-opacity-10 text-warning">
+                                <i class="bi bi-pie-chart"></i>
+                            </div>
+                            <div>
+                                <div class="metric-label">Presupuestos Activos</div>
+                                <div class="metric-value"><?= htmlspecialchars($metrics['presupuestos_activos']) ?></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-4">
+                <div class="card metric-card <?= $metrics['alertas_presupuesto'] > 0 ? 'warning' : 'success' ?>">
+                    <div class="card-body">
+                        <div class="d-flex align-items-center">
+                            <div class="metric-icon <?= $metrics['alertas_presupuesto'] > 0 ? 'bg-warning bg-opacity-10 text-warning' : 'bg-success bg-opacity-10 text-success' ?>">
+                                <i class="bi bi-bell"></i>
+                            </div>
+                            <div>
+                                <div class="metric-label">Alertas Presupuesto</div>
+                                <div class="metric-value"><?= htmlspecialchars($metrics['alertas_presupuesto']) ?></div>
                             </div>
                         </div>
                     </div>
@@ -658,6 +779,9 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                     <div class="empty-state">
                         <i class="bi bi-receipt"></i>
                         <p class="mb-0">No hay transacciones recientes</p>
+                        <a href="transacciones.php?action=new" class="btn btn-primary mt-3">
+                            <i class="bi bi-plus-circle me-1"></i> Crear primera transacción
+                        </a>
                     </div>
                 <?php else: ?>
                     <div class="table-responsive">
@@ -667,7 +791,6 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                     <th>Fecha</th>
                                     <th>Descripción</th>
                                     <th>Categoría</th>
-                                    <th>Cuenta</th>
                                     <th class="text-end">Monto</th>
                                 </tr>
                             </thead>
@@ -678,17 +801,23 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                         <div class="fw-medium"><?= htmlspecialchars(date('d M', strtotime($t['fecha']))) ?></div>
                                         <small class="text-muted"><?= htmlspecialchars(date('H:i', strtotime($t['fecha']))) ?></small>
                                     </td>
-                                    <td class="fw-medium"><?= htmlspecialchars($t['descripcion'] ?? 'Sin descripción') ?></td>
+                                    <td class="fw-medium">
+                                        <div class="d-flex align-items-center">
+                                            <div class="transaction-icon" style="background-color: <?= htmlspecialchars($t['color']) ?>20; color: <?= htmlspecialchars($t['color']) ?>;">
+                                                <i class="<?= getBootstrapIcon($t['icono']) ?>"></i>
+                                            </div>
+                                            <?= htmlspecialchars($t['descripcion'] ?? 'Sin descripción') ?>
+                                        </div>
+                                    </td>
                                     <td>
                                         <span class="badge" style="background-color: <?= htmlspecialchars($t['color']) ?>; color: white;">
                                             <?= htmlspecialchars($t['categoria']) ?>
                                         </span>
                                     </td>
-                                    <td><?= htmlspecialchars($t['cuenta']) ?></td>
                                     <td class="text-end">
                                         <span class="fw-bold <?= $t['tipo'] === 'ingreso' ? 'text-success' : 'text-danger' ?>">
                                             <?= $t['tipo'] === 'ingreso' ? '+' : '-' ?>
-                                            <?= formatMoney(abs($t['monto']), $t['moneda']) ?>
+                                            <?= formatMoney(abs($t['monto']), $user_currency) ?>
                                         </span>
                                     </td>
                                 </tr>
