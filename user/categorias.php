@@ -1,7 +1,7 @@
 <?php
 session_start();
 if (!isset($_SESSION["user_id"])) {
-    header("Location: ../auth/login.php");
+    header("Location: ../index.php");
     exit();
 }
 require "../config/database.php";
@@ -31,14 +31,18 @@ $iconos = [
     "bi-lightning" => ["nombre" => "Energía", "clase" => "text-yellow"],
     "bi-droplet" => ["nombre" => "Agua", "clase" => "text-blue"],
     "bi-bag" => ["nombre" => "Ropa", "clase" => "text-pink"],
-    "bi-controller" => ["nombre" => "Juegos", "clase" => "text-purple"]
+    "bi-controller" => ["nombre" => "Juegos", "clase" => "text-purple"],
+    "bi-airplane" => ["nombre" => "Viajes", "clase" => "text-info"],
+    "bi-tools" => ["nombre" => "Mantenimiento", "clase" => "text-warning"],
+    "bi-flower1" => ["nombre" => "Belleza", "clase" => "text-pink"],
+    "bi-bank" => ["nombre" => "Impuestos", "clase" => "text-danger"]
 ];
 
 // Colores disponibles (coherente con valores por defecto del esquema)
 $colores = [
     "#1976D2" => "Azul Principal",
     "#FF6384" => "Rojo",
-    "#36A2EB" => "Azul Claro",
+    "#36A2EB" => "Azul Claro", 
     "#FFCE56" => "Amarillo",
     "#4BC0C0" => "Turquesa",
     "#9966FF" => "Morado",
@@ -49,7 +53,10 @@ $colores = [
     "#A1887F" => "Marrón",
     "#4CAF50" => "Verde Success",
     "#F44336" => "Rojo Danger",
-    "#FF9800" => "Naranja Warning"
+    "#FF9800" => "Naranja Warning",
+    "#9C27B0" => "Púrpura",
+    "#00BCD4" => "Cian",
+    "#607D8B" => "Gris Azulado"
 ];
 
 // Clase para manejar categorías
@@ -60,12 +67,12 @@ class CategoryRepository {
         $this->db = $db;
     }
 
-    public function getAll($userId, $filters = [], $limit = 10, $offset = 0) {
+    public function getAll($userId, $filters = [], $limit = 12, $offset = 0) {
         $query = "
-            SELECT c.*, u.nombre_usuario,
-                   COUNT(t.id) as total_transacciones
+            SELECT c.*, 
+                   COUNT(t.id) as total_transacciones,
+                   COALESCE(SUM(CASE WHEN t.fecha >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH) THEN t.monto ELSE 0 END), 0) as monto_mes
             FROM categorias c
-            JOIN usuarios u ON c.usuario_id = u.id
             LEFT JOIN transacciones t ON c.id = t.categoria_id
             WHERE c.usuario_id = :usuario_id
         ";
@@ -77,15 +84,40 @@ class CategoryRepository {
             $params[':tipo'] = $filters['tipo'];
         }
 
+        if (!empty($filters['search'])) {
+            $query .= " AND c.nombre LIKE :search";
+            $params[':search'] = '%' . $filters['search'] . '%';
+        }
+
         $query .= " GROUP BY c.id";
 
         // Contar total para paginación
-        $countStmt = $this->db->prepare("SELECT COUNT(*) FROM ($query) AS filtered");
+        $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
+        $countStmt = $this->db->prepare($countQuery);
         $countStmt->execute($params);
         $total = $countStmt->fetchColumn();
 
+        // Aplicar ordenamiento
+        $orderBy = "c.creado_en DESC";
+        if (!empty($filters['sort'])) {
+            switch ($filters['sort']) {
+                case 'nombre_asc':
+                    $orderBy = "c.nombre ASC";
+                    break;
+                case 'nombre_desc':
+                    $orderBy = "c.nombre DESC";
+                    break;
+                case 'transacciones':
+                    $orderBy = "total_transacciones DESC";
+                    break;
+                case 'reciente':
+                    $orderBy = "c.creado_en DESC";
+                    break;
+            }
+        }
+
         // Aplicar paginación
-        $query .= " ORDER BY c.creado_en DESC LIMIT :limit OFFSET :offset";
+        $query .= " ORDER BY $orderBy LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($query);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
@@ -105,16 +137,22 @@ class CategoryRepository {
         $stmt = $this->db->prepare("
             SELECT 
                 tipo,
-                COUNT(*) as total_categorias
-            FROM categorias 
-            WHERE usuario_id = :usuario_id 
+                COUNT(*) as total_categorias,
+                COALESCE(SUM(
+                    (SELECT COUNT(*) FROM transacciones t WHERE t.categoria_id = c.id)
+                ), 0) as total_transacciones
+            FROM categorias c
+            WHERE c.usuario_id = :usuario_id 
             GROUP BY tipo
         ");
         $stmt->execute([':usuario_id' => $userId]);
         
-        $stats = ['ingreso' => 0, 'gasto' => 0];
+        $stats = ['ingreso' => ['categorias' => 0, 'transacciones' => 0], 'gasto' => ['categorias' => 0, 'transacciones' => 0]];
         while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-            $stats[$row['tipo']] = (int)$row['total_categorias'];
+            $stats[$row['tipo']] = [
+                'categorias' => (int)$row['total_categorias'],
+                'transacciones' => (int)$row['total_transacciones']
+            ];
         }
         return $stats;
     }
@@ -156,6 +194,33 @@ class CategoryRepository {
         $stmt = $this->db->prepare("DELETE FROM categorias WHERE id = :id AND usuario_id = :usuario_id");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
+
+    public function getMostUsedCategories($userId, $limit = 5) {
+        $stmt = $this->db->prepare("
+            SELECT c.*, COUNT(t.id) as total_transacciones
+            FROM categorias c
+            LEFT JOIN transacciones t ON c.id = t.categoria_id
+            WHERE c.usuario_id = :usuario_id
+            GROUP BY c.id
+            ORDER BY total_transacciones DESC
+            LIMIT :limit
+        ");
+        $stmt->bindValue(':usuario_id', $userId, PDO::PARAM_INT);
+        $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $stmt->execute();
+        return $stmt->fetchAll();
+    }
+}
+
+// Función para formatear dinero
+function formatMoney($amount, $moneda = 'PYG') {
+    $symbols = [
+        'PYG' => 'Gs ',
+        'USD' => '$ ',
+        'EUR' => '€ '
+    ];
+    $symbol = $symbols[$moneda] ?? 'Gs ';
+    return $symbol . number_format($amount / 100, 0, ',', '.');
 }
 
 // Procesar operaciones CRUD
@@ -186,7 +251,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         $error = 'Error al procesar la operación: ' . $e->getMessage();
     }
     
-    header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+    header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query($_GET));
     exit();
 }
 
@@ -201,7 +266,7 @@ if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
         $_SESSION['error'] = 'No se puede eliminar una categoría que tiene transacciones asociadas';
     }
     
-    header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+    header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query(array_diff_key($_GET, ['delete' => ''])));
     exit();
 }
 
@@ -218,11 +283,13 @@ if (isset($_SESSION['error'])) {
 // Obtener filtros de la URL
 $filters = [
     'tipo' => $_GET['tipo'] ?? '',
+    'search' => $_GET['search'] ?? '',
+    'sort' => $_GET['sort'] ?? 'reciente'
 ];
 
 // Configuración de paginación
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$perPage = 6;
+$perPage = 12;
 $offset = ($page - 1) * $perPage;
 
 // Obtener categorías con filtros y paginación
@@ -233,6 +300,14 @@ $totalPages = ceil($totalCategorias / $perPage);
 
 // Obtener estadísticas por tipo
 $stats = $categoryRepo->getStatsByType($usuario_id);
+
+// Obtener categorías más usadas
+$mostUsedCategories = $categoryRepo->getMostUsedCategories($usuario_id, 5);
+
+// Obtener información del usuario para la moneda
+$stmt = $db->prepare("SELECT moneda FROM usuarios WHERE id = ?");
+$stmt->execute([$usuario_id]);
+$user_currency = $stmt->fetchColumn();
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -310,7 +385,6 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             transform: translateY(-2px);
         }
         
-        /* Nuevos estilos mejorados */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -488,75 +562,16 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             transition: all 0.2s ease;
         }
         
-        h1, h2, h3, h4, h5, h6 {
-            font-weight: 700;
-            color: var(--bs-dark);
-        }
-        
-        .card-title {
-            font-weight: 600;
-            color: var(--bs-dark);
-            margin-bottom: 1rem;
-        }
-        
-        .container {
-            max-width: 1400px;
-        }
-        
-        .modal-content {
-            border: none;
-            border-radius: 1rem;
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
-        }
-        
-        .modal-header {
-            border-bottom: 1px solid var(--bs-border);
-            padding: 1.5rem;
-        }
-        
-        .modal-body {
-            padding: 1.5rem;
-        }
-        
-        .modal-footer {
-            border-top: 1px solid var(--bs-border);
-            padding: 1.5rem;
-        }
-        
-        .form-control, .form-select {
+        .quick-actions .btn {
             border-radius: 0.75rem;
-            border: 1px solid var(--bs-border);
-            padding: 0.75rem 1rem;
-            transition: all 0.2s ease;
+            padding: 1rem;
+            text-align: center;
+            transition: all 0.3s ease;
         }
         
-        .form-control:focus, .form-select:focus {
-            border-color: var(--bs-primary);
-            box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.1);
-        }
-        
-        .alert {
-            border: none;
-            border-radius: 0.75rem;
-            padding: 1rem 1.25rem;
-        }
-        
-        .pagination .page-link {
-            border: none;
-            border-radius: 0.5rem;
-            margin: 0 0.25rem;
-            color: #666;
-            font-weight: 500;
-        }
-        
-        .pagination .page-item.active .page-link {
-            background-color: var(--bs-primary);
-            color: white;
-        }
-        
-        .pagination .page-link:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.1);
-            color: var(--bs-primary);
+        .quick-actions .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15);
         }
         
         .empty-state {
@@ -571,32 +586,45 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             opacity: 0.5;
         }
         
-        .dropdown-menu {
-            border: none;
-            border-radius: 0.75rem;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            padding: 0.5rem;
-        }
-        
-        .dropdown-item {
+        .transactions-badge {
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
             border-radius: 0.5rem;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
+        }
+        
+        .search-box {
+            position: relative;
+        }
+        
+        .search-box .form-control {
+            padding-left: 2.5rem;
+        }
+        
+        .search-box i {
+            position: absolute;
+            left: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #6c757d;
+        }
+        
+        .most-used-category {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            border-radius: 0.75rem;
             transition: all 0.2s ease;
+            margin-bottom: 0.5rem;
         }
         
-        .dropdown-item:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.1);
-            color: var(--bs-primary);
-            transform: translateX(4px);
+        .most-used-category:hover {
+            background-color: var(--bs-light);
         }
         
-        .filters-card {
-            background: white;
-            border-radius: 1rem;
-            padding: 1.5rem;
-            margin-bottom: 2rem;
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.04);
+        .usage-badge {
+            font-size: 0.7rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.5rem;
         }
         
         .text-pink { color: var(--bs-pink) !important; }
@@ -607,28 +635,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
         .text-cyan { color: var(--bs-cyan) !important; }
         .text-yellow { color: var(--bs-yellow) !important; }
         
-        .transactions-badge {
-            font-size: 0.7rem;
-            padding: 0.25rem 0.5rem;
-            border-radius: 0.5rem;
-        }
-        
         @media (max-width: 768px) {
-            .container {
-                padding-left: 1rem;
-                padding-right: 1rem;
-            }
-            
-            .color-option {
-                padding: 0.375rem;
-            }
-            
-            .color-circle {
-                width: 20px;
-                height: 20px;
-                margin-right: 6px;
-            }
-            
             .stats-grid {
                 grid-template-columns: 1fr;
             }
@@ -644,7 +651,7 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
     <nav class="navbar navbar-expand-lg navbar-light sticky-top">
         <div class="container">
             <a class="navbar-brand d-flex align-items-center" href="#">
-                Finzen
+                <i class="bi bi-wallet2 me-2"></i>Finzen
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
                 <span class="navbar-toggler-icon"></span>
@@ -671,8 +678,14 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                             <i class="bi bi-arrow-left-right me-2"></i> Transacciones
                         </a>
                     </li>
+                    <li class="nav-item">
+                        <a href="reportes.php" class="nav-link">
+                            <i class="bi bi-graph-up me-2"></i>Reportes
+                        </a>
+                    </li>
                 </ul>
                 <div class="d-flex align-items-center">
+                    <span class="text-muted me-3"><?= htmlspecialchars($_SESSION['username']) ?></span>
                     <a href="../auth/logout.php" class="btn btn-outline-danger btn-sm">
                         <i class="bi bi-box-arrow-right me-1"></i> Salir
                     </a>
@@ -710,185 +723,259 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             </div>
         <?php endif; ?>
 
-        <!-- Estadísticas Mejoradas -->
-        <div class="stats-grid">
-            <div class="stat-card ingreso">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-value text-success"><?= $stats['ingreso'] ?></div>
-                        <div class="stat-label">Categorías de Ingreso</div>
-                    </div>
-                    <div class="stat-icon bg-success bg-opacity-10 text-success">
-                        <i class="bi bi-arrow-down-circle"></i>
-                    </div>
-                </div>
+        <!-- Quick Actions -->
+        <div class="row g-3 mb-4 quick-actions">
+            <div class="col-md-3">
+                <a href="transacciones.php?action=new" class="btn btn-primary w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-plus-circle fs-2 mb-2"></i>
+                    <span>Nueva Transacción</span>
+                </a>
             </div>
-            
-            <div class="stat-card gasto">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-value text-danger"><?= $stats['gasto'] ?></div>
-                        <div class="stat-label">Categorías de Gasto</div>
-                    </div>
-                    <div class="stat-icon bg-danger bg-opacity-10 text-danger">
-                        <i class="bi bi-arrow-up-circle"></i>
-                    </div>
-                </div>
+            <div class="col-md-3">
+                <a href="presupuestos.php" class="btn btn-success w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-pie-chart fs-2 mb-2"></i>
+                    <span>Gestionar Presupuestos</span>
+                </a>
             </div>
-            
-            <div class="stat-card">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <div class="stat-value text-primary"><?= $totalCategorias ?></div>
-                        <div class="stat-label">Total de Categorías</div>
-                    </div>
-                    <div class="stat-icon bg-primary bg-opacity-10 text-primary">
-                        <i class="bi bi-tags"></i>
-                    </div>
-                </div>
+            <div class="col-md-3">
+                <a href="reportes.php" class="btn btn-info w-100 d-flex flex-column align-items-center">
+                    <i class="bi bi-graph-up fs-2 mb-2"></i>
+                    <span>Ver Reportes</span>
+                </a>
+            </div>
+            <div class="col-md-3">
+                <button class="btn btn-warning w-100 d-flex flex-column align-items-center" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+                    <i class="bi bi-tag fs-2 mb-2"></i>
+                    <span>Agregar Categoría</span>
+                </button>
             </div>
         </div>
 
-        <!-- Filtros Mejorados -->
-        <div class="filters-card">
-            <div class="row g-3 align-items-end">
-                <div class="col-md-4">
-                    <label for="tipo" class="form-label">Tipo de Categoría</label>
-                    <select class="form-select" id="tipo" name="tipo" onchange="this.form.submit()">
-                        <option value="">Todos los tipos</option>
-                        <?php foreach ($tipos as $codigo => $nombre): ?>
-                            <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($nombre) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                </div>
-                <div class="col-md-4">
-                    <button type="submit" class="btn btn-primary w-100">
-                        <i class="bi bi-funnel me-1"></i> Aplicar Filtros
-                    </button>
-                </div>
-                <div class="col-md-4 text-md-end">
-                    <span class="badge bg-primary badge-custom">
-                        <?= $totalCategorias ?> categoría<?= $totalCategorias !== 1 ? 's' : '' ?> encontrada<?= $totalCategorias !== 1 ? 's' : '' ?>
-                    </span>
-                </div>
-            </div>
-        </div>
-
-        <!-- Lista de categorías mejorada -->
-        <div class="card">
-            <div class="card-body">
-                <?php if (empty($categorias)): ?>
-                    <div class="empty-state">
-                        <i class="bi bi-tags"></i>
-                        <h3 class="mb-2">No se encontraron categorías</h3>
-                        <p class="text-muted mb-4">No hay categorías que coincidan con los filtros seleccionados</p>
-                        <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
-                            <i class="bi bi-plus-circle me-1"></i> Agregar Categoría
-                        </button>
-                    </div>
-                <?php else: ?>
-                    <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
-                        <?php foreach ($categorias as $categoria): ?>
-                        <div class="col">
-                            <div class="card category-card h-100 <?= $categoria["tipo"] ?>">
-                                <div class="card-body">
-                                    <div class="category-actions">
-                                        <div class="dropdown">
-                                            <button class="btn btn-sm btn-outline-secondary btn-action" type="button" data-bs-toggle="dropdown">
-                                                <i class="bi bi-three-dots-vertical"></i>
-                                            </button>
-                                            <ul class="dropdown-menu">
-                                                <li>
-                                                    <button class="dropdown-item edit-btn"
-                                                            data-bs-toggle="modal"
-                                                            data-bs-target="#editCategoryModal"
-                                                            data-id="<?= $categoria["id"] ?>"
-                                                            data-nombre="<?= htmlspecialchars($categoria["nombre"]) ?>"
-                                                            data-tipo="<?= $categoria["tipo"] ?>"
-                                                            data-icono="<?= $categoria["icono"] ?>"
-                                                            data-color="<?= $categoria["color"] ?>">
-                                                        <i class="bi bi-pencil me-2"></i> Editar
-                                                    </button>
-                                                </li>
-                                                <li>
-                                                    <a class="dropdown-item text-danger"
-                                                       href="?delete=<?= $categoria["id"] ?>&page=<?= $page ?>&tipo=<?= $filters['tipo'] ?>"
-                                                       onclick="return confirm('¿Estás seguro de eliminar esta categoría?\n\n<?= $categoria['total_transacciones'] > 0 ? 'ADVERTENCIA: Esta categoría tiene ' . $categoria['total_transacciones'] . ' transacción(es) asociada(s) y no se puede eliminar.' : 'Esta acción no se puede deshacer.' ?>')">
-                                                        <i class="bi bi-trash me-2"></i> Eliminar
-                                                    </a>
-                                                </li>
-                                            </ul>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="text-center mb-3">
-                                        <div class="icon-preview" style="color: <?= htmlspecialchars($categoria["color"]) ?>">
-                                            <i class="bi <?= htmlspecialchars($categoria["icono"]) ?>"></i>
-                                        </div>
-                                        <h5 class="card-title mb-2"><?= htmlspecialchars($categoria["nombre"]) ?></h5>
-                                        <div class="mb-2">
-                                            <span class="badge <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> category-badge">
-                                                <?= htmlspecialchars($tipos[$categoria["tipo"]]) ?>
-                                            </span>
-                                        </div>
-                                        <div class="color-selector justify-content-center">
-                                            <span class="color-circle" style="background-color: <?= htmlspecialchars($categoria["color"]) ?>"></span>
-                                            <small class="text-muted"><?= htmlspecialchars($colores[$categoria["color"]] ?? $categoria["color"]) ?></small>
-                                        </div>
-                                    </div>
-                                    
-                                    <div class="text-center">
-                                        <small class="text-muted">
-                                            <i class="bi bi-clock me-1"></i>
-                                            Creada: <?= date('d/m/Y', strtotime($categoria["creado_en"])) ?>
-                                        </small>
-                                        <?php if ($categoria["total_transacciones"] > 0): ?>
-                                            <br>
-                                            <span class="badge bg-info transactions-badge">
-                                                <i class="bi bi-list-check me-1"></i>
-                                                <?= $categoria["total_transacciones"] ?> transacción(es)
-                                            </span>
-                                        <?php endif; ?>
-                                    </div>
-                                </div>
+        <div class="row">
+            <!-- Sidebar con estadísticas -->
+            <div class="col-lg-3 mb-4">
+                <!-- Estadísticas -->
+                <div class="stats-grid">
+                    <div class="stat-card ingreso">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="stat-value text-success"><?= $stats['ingreso']['categorias'] ?></div>
+                                <div class="stat-label">Categorías de Ingreso</div>
+                                <small class="text-muted"><?= $stats['ingreso']['transacciones'] ?> transacciones</small>
+                            </div>
+                            <div class="stat-icon bg-success bg-opacity-10 text-success">
+                                <i class="bi bi-arrow-down-circle"></i>
                             </div>
                         </div>
+                    </div>
+                    
+                    <div class="stat-card gasto">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <div>
+                                <div class="stat-value text-danger"><?= $stats['gasto']['categorias'] ?></div>
+                                <div class="stat-label">Categorías de Gasto</div>
+                                <small class="text-muted"><?= $stats['gasto']['transacciones'] ?> transacciones</small>
+                            </div>
+                            <div class="stat-icon bg-danger bg-opacity-10 text-danger">
+                                <i class="bi bi-arrow-up-circle"></i>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Categorías más usadas -->
+                <?php if (!empty($mostUsedCategories)): ?>
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <h6 class="card-title mb-3">
+                            <i class="bi bi-star me-2"></i>Categorías Más Usadas
+                        </h6>
+                        <?php foreach ($mostUsedCategories as $category): ?>
+                            <?php if ($category['total_transacciones'] > 0): ?>
+                            <div class="most-used-category">
+                                <div class="me-3">
+                                    <i class="bi <?= htmlspecialchars($category['icono']) ?> fs-5" style="color: <?= htmlspecialchars($category['color']) ?>"></i>
+                                </div>
+                                <div class="flex-grow-1">
+                                    <div class="fw-medium"><?= htmlspecialchars($category['nombre']) ?></div>
+                                    <small class="text-muted"><?= $category['total_transacciones'] ?> transacciones</small>
+                                </div>
+                                <span class="badge <?= $category['tipo'] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> usage-badge">
+                                    <?= $category['tipo'] === 'ingreso' ? 'Ingreso' : 'Gasto' ?>
+                                </span>
+                            </div>
+                            <?php endif; ?>
                         <?php endforeach; ?>
                     </div>
-
-                    <!-- Paginación -->
-                    <?php if ($totalPages > 1): ?>
-                    <nav class="mt-4">
-                        <ul class="pagination justify-content-center">
-                            <?php if ($page > 1): ?>
-                                <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page - 1 ?>&tipo=<?= $filters['tipo'] ?>" aria-label="Anterior">
-                                        <span aria-hidden="true">&laquo;</span>
-                                    </a>
-                                </li>
-                            <?php endif; ?>
-
-                            <?php for ($i = 1; $i <= $totalPages; $i++): ?>
-                                <li class="page-item <?= $i === $page ? 'active' : '' ?>">
-                                    <a class="page-link" href="?page=<?= $i ?>&tipo=<?= $filters['tipo'] ?>">
-                                        <?= $i ?>
-                                    </a>
-                                </li>
-                            <?php endfor; ?>
-
-                            <?php if ($page < $totalPages): ?>
-                                <li class="page-item">
-                                    <a class="page-link" href="?page=<?= $page + 1 ?>&tipo=<?= $filters['tipo'] ?>" aria-label="Siguiente">
-                                        <span aria-hidden="true">&raquo;</span>
-                                    </a>
-                                </li>
-                            <?php endif; ?>
-                        </ul>
-                    </nav>
-                    <?php endif; ?>
+                </div>
                 <?php endif; ?>
+            </div>
+
+            <!-- Contenido principal -->
+            <div class="col-lg-9">
+                <!-- Filtros Mejorados -->
+                <div class="card mb-4">
+                    <div class="card-body">
+                        <form method="GET" class="row g-3 align-items-end">
+                            <div class="col-md-4">
+                                <label for="search" class="form-label">Buscar Categoría</label>
+                                <div class="search-box">
+                                    <i class="bi bi-search"></i>
+                                    <input type="text" class="form-control" id="search" name="search" 
+                                           placeholder="Buscar por nombre..." value="<?= htmlspecialchars($filters['search']) ?>">
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="tipo" class="form-label">Tipo</label>
+                                <select class="form-select" id="tipo" name="tipo">
+                                    <option value="">Todos los tipos</option>
+                                    <?php foreach ($tipos as $codigo => $nombre): ?>
+                                        <option value="<?= $codigo ?>" <?= ($filters['tipo'] === $codigo) ? 'selected' : '' ?>>
+                                            <?= htmlspecialchars($nombre) ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <label for="sort" class="form-label">Ordenar por</label>
+                                <select class="form-select" id="sort" name="sort">
+                                    <option value="reciente" <?= $filters['sort'] === 'reciente' ? 'selected' : '' ?>>Más recientes</option>
+                                    <option value="nombre_asc" <?= $filters['sort'] === 'nombre_asc' ? 'selected' : '' ?>>Nombre A-Z</option>
+                                    <option value="nombre_desc" <?= $filters['sort'] === 'nombre_desc' ? 'selected' : '' ?>>Nombre Z-A</option>
+                                    <option value="transacciones" <?= $filters['sort'] === 'transacciones' ? 'selected' : '' ?>>Más transacciones</option>
+                                </select>
+                            </div>
+                            <div class="col-md-2">
+                                <button type="submit" class="btn btn-primary w-100">
+                                    <i class="bi bi-funnel me-1"></i> Filtrar
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Lista de categorías mejorada -->
+                <div class="card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-center mb-4">
+                            <h5 class="card-title mb-0">Mis Categorías</h5>
+                            <span class="badge bg-primary">
+                                <?= $totalCategorias ?> categoría<?= $totalCategorias !== 1 ? 's' : '' ?>
+                            </span>
+                        </div>
+
+                        <?php if (empty($categorias)): ?>
+                            <div class="empty-state">
+                                <i class="bi bi-tags"></i>
+                                <h3 class="mb-2">No se encontraron categorías</h3>
+                                <p class="text-muted mb-4">No hay categorías que coincidan con los filtros seleccionados</p>
+                                <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
+                                    <i class="bi bi-plus-circle me-1"></i> Agregar Categoría
+                                </button>
+                            </div>
+                        <?php else: ?>
+                            <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-4 mb-4">
+                                <?php foreach ($categorias as $categoria): ?>
+                                <div class="col">
+                                    <div class="card category-card h-100 <?= $categoria["tipo"] ?>">
+                                        <div class="card-body">
+                                            <div class="category-actions">
+                                                <div class="dropdown">
+                                                    <button class="btn btn-sm btn-outline-secondary btn-action" type="button" data-bs-toggle="dropdown">
+                                                        <i class="bi bi-three-dots-vertical"></i>
+                                                    </button>
+                                                    <ul class="dropdown-menu">
+                                                        <li>
+                                                            <button class="dropdown-item edit-btn"
+                                                                    data-bs-toggle="modal"
+                                                                    data-bs-target="#editCategoryModal"
+                                                                    data-id="<?= $categoria["id"] ?>"
+                                                                    data-nombre="<?= htmlspecialchars($categoria["nombre"]) ?>"
+                                                                    data-tipo="<?= $categoria["tipo"] ?>"
+                                                                    data-icono="<?= $categoria["icono"] ?>"
+                                                                    data-color="<?= $categoria["color"] ?>">
+                                                                <i class="bi bi-pencil me-2"></i> Editar
+                                                            </button>
+                                                        </li>
+                                                        <li>
+                                                            <a class="dropdown-item text-danger"
+                                                               href="?<?= http_build_query(array_merge($_GET, ['delete' => $categoria["id"]])) ?>"
+                                                               onclick="return confirm('¿Estás seguro de eliminar esta categoría?\n\n<?= $categoria['total_transacciones'] > 0 ? 'ADVERTENCIA: Esta categoría tiene ' . $categoria['total_transacciones'] . ' transacción(es) asociada(s) y no se puede eliminar.' : 'Esta acción no se puede deshacer.' ?>')">
+                                                                <i class="bi bi-trash me-2"></i> Eliminar
+                                                            </a>
+                                                        </li>
+                                                    </ul>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="text-center mb-3">
+                                                <div class="icon-preview" style="color: <?= htmlspecialchars($categoria["color"]) ?>">
+                                                    <i class="bi <?= htmlspecialchars($categoria["icono"]) ?>"></i>
+                                                </div>
+                                                <h5 class="card-title mb-2"><?= htmlspecialchars($categoria["nombre"]) ?></h5>
+                                                <div class="mb-2">
+                                                    <span class="badge <?= $categoria["tipo"] === 'ingreso' ? 'bg-success' : 'bg-danger' ?> category-badge">
+                                                        <?= htmlspecialchars($tipos[$categoria["tipo"]]) ?>
+                                                    </span>
+                                                </div>
+                                                <div class="color-selector justify-content-center">
+                                                    <span class="color-circle" style="background-color: <?= htmlspecialchars($categoria["color"]) ?>"></span>
+                                                    <small class="text-muted"><?= htmlspecialchars($colores[$categoria["color"]] ?? $categoria["color"]) ?></small>
+                                                </div>
+                                            </div>
+                                            
+                                            <div class="text-center">
+                                                <small class="text-muted">
+                                                    <i class="bi bi-clock me-1"></i>
+                                                    Creada: <?= date('d/m/Y', strtotime($categoria["creado_en"])) ?>
+                                                </small>
+                                                <?php if ($categoria["total_transacciones"] > 0): ?>
+                                                    <br>
+                                                    <span class="badge bg-info transactions-badge">
+                                                        <i class="bi bi-list-check me-1"></i>
+                                                        <?= $categoria["total_transacciones"] ?> transacción(es)
+                                                    </span>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+
+                            <!-- Paginación -->
+                            <?php if ($totalPages > 1): ?>
+                            <nav class="mt-4">
+                                <ul class="pagination justify-content-center">
+                                    <?php if ($page > 1): ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page - 1])) ?>" aria-label="Anterior">
+                                                <span aria-hidden="true">&laquo;</span>
+                                            </a>
+                                        </li>
+                                    <?php endif; ?>
+
+                                    <?php for ($i = 1; $i <= $totalPages; $i++): ?>
+                                        <li class="page-item <?= $i === $page ? 'active' : '' ?>">
+                                            <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $i])) ?>">
+                                                <?= $i ?>
+                                            </a>
+                                        </li>
+                                    <?php endfor; ?>
+
+                                    <?php if ($page < $totalPages): ?>
+                                        <li class="page-item">
+                                            <a class="page-link" href="?<?= http_build_query(array_merge($_GET, ['page' => $page + 1])) ?>" aria-label="Siguiente">
+                                                <span aria-hidden="true">&raquo;</span>
+                                            </a>
+                                        </li>
+                                    <?php endif; ?>
+                                </ul>
+                            </nav>
+                            <?php endif; ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -1040,11 +1127,14 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                     // Seleccionar el color correcto
                     const color = this.dataset.color;
                     if (color) {
-                        const colorInput = document.querySelector(`#edit_colores_container input[value="${color}"]`);
-                        if (colorInput) {
-                            colorInput.checked = true;
-                            colorInput.closest('.color-option').classList.add('active');
-                        }
+                        document.querySelectorAll('#edit_colores_container .color-option').forEach(option => {
+                            option.classList.remove('active');
+                            const radio = option.querySelector('input[type="radio"]');
+                            if (radio && radio.value === color) {
+                                option.classList.add('active');
+                                radio.checked = true;
+                            }
+                        });
                     }
                 });
             });
@@ -1054,8 +1144,9 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
                 option.addEventListener('click', function() {
                     const radio = this.querySelector('input[type="radio"]');
                     if (radio) {
-                        // Remover selección anterior
-                        document.querySelectorAll('.color-option').forEach(opt => {
+                        // Remover selección anterior en el mismo grupo
+                        const group = this.closest('.modal-body') || this.closest('#edit_colores_container');
+                        group.querySelectorAll('.color-option').forEach(opt => {
                             opt.classList.remove('active');
                         });
                         // Marcar como seleccionado
@@ -1078,16 +1169,19 @@ $stats = $categoryRepo->getStatsByType($usuario_id);
             // Resetear modales al cerrar
             document.querySelectorAll('.modal').forEach(modal => {
                 modal.addEventListener('hidden.bs.modal', function() {
-                    document.querySelectorAll('.color-option').forEach(opt => {
+                    const form = this.querySelector('form');
+                    if (form) form.reset();
+                    this.querySelectorAll('.color-option').forEach(opt => {
                         opt.classList.remove('active');
                     });
                 });
             });
 
-            // Auto-submit del filtro cuando cambia
-            document.getElementById('tipo').addEventListener('change', function() {
-                this.form.submit();
-            });
+            // Auto-focus en búsqueda
+            const searchInput = document.getElementById('search');
+            if (searchInput && !searchInput.value) {
+                searchInput.focus();
+            }
         });
     </script>
 </body>
