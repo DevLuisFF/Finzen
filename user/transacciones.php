@@ -654,12 +654,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
                         <a class="nav-link" href="index.php">
-                            <i class="bi bi-speedometer2 me-2"></i> Dashboard
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="cuentas.php">
-                            <i class="bi bi-wallet2 me-2"></i> Cuentas
+                            <i class="bi bi-speedometer2 me-2"></i> Resumen
                         </a>
                     </li>
                     <li class="nav-item">

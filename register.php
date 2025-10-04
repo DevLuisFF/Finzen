@@ -1,3 +1,24 @@
+<?php
+session_start();
+
+// Verificar si hay mensajes de error
+$register_error = $_SESSION['register_error'] ?? '';
+$register_success = $_SESSION['register_success'] ?? '';
+
+// Limpiar mensajes después de mostrarlos
+unset($_SESSION['register_error']);
+unset($_SESSION['register_success']);
+
+// Si ya está logueado, redirigir
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+    switch ($_SESSION['rol_id'] ?? 2) {
+        case 1: header('Location: admin/index.php'); break;
+        case 2: header('Location: user/index.php'); break;
+        default: header('Location: user/index.php'); break;
+    }
+    exit();
+}
+?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -93,6 +114,35 @@
         .password-container {
             position: relative;
         }
+        
+        .alert {
+            border-radius: 15px;
+            border: none;
+        }
+        
+        .shake-animation {
+            animation: shake 0.5s ease-in-out;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .success-animation {
+            animation: success 0.6s ease-in-out;
+        }
+        
+        @keyframes success {
+            0% { transform: scale(0.95); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
+        .form-control.is-valid {
+            border-color: #198754;
+            background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'%3e%3cpath fill='%23198754' d='M2.3 6.73.6 4.53c-.4-1.04.46-1.4 1.1-.8l1.1 1.4 3.4-3.8c.6-.63 1.6-.27 1.2.7l-4 4.6c-.43.5-.8.4-1.1.1z'/%3e%3c/svg%3e");
+        }
     </style>
 </head>
 <body>
@@ -105,34 +155,30 @@
                     <p class="text-muted">Completa el formulario para registrarte</p>
                 </div>
 
-                <!-- Mensajes de error/éxito -->
-                <?php if (isset($_SESSION["error"])): ?>
-                <div class="alert alert-danger alert-dismissible fade show" role="alert">
-                    <i class="bi bi-exclamation-circle me-2"></i>
-                    <?php
-                    echo $_SESSION["error"];
-                    unset($_SESSION["error"]);
-                    ?>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
+                <!-- Mensajes de error -->
+                <?php if (!empty($register_error)): ?>
+                    <div class="alert alert-danger alert-dismissible fade show shake-animation" role="alert">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <?php echo htmlspecialchars($register_error); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
                 <?php endif; ?>
 
-                <?php if (isset($_SESSION["success"])): ?>
-                <div class="alert alert-success alert-dismissible fade show" role="alert">
-                    <i class="bi bi-check-circle me-2"></i>
-                    <?php
-                    echo $_SESSION["success"];
-                    unset($_SESSION["success"]);
-                    ?>
-                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-                </div>
+                <!-- Mensajes de éxito (si se redirige desde algún otro proceso) -->
+                <?php if (!empty($register_success)): ?>
+                    <div class="alert alert-success alert-dismissible fade show success-animation" role="alert">
+                        <i class="bi bi-check-circle-fill me-2"></i>
+                        <?php echo htmlspecialchars($register_success); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
                 <?php endif; ?>
 
                 <form id="registerForm" method="POST" action="../auth/register.php" novalidate>
                     <div class="mb-3">
                         <label for="username" class="form-label">Nombre de Usuario</label>
                         <input type="text" class="form-control rounded-pill" name="username" id="username" required
-                               placeholder="Ej: usuario123">
+                               placeholder="Ej: usuario123"
+                               value="<?php echo htmlspecialchars($_POST['username'] ?? ''); ?>">
                         <div class="form-text">Este será tu nombre público en la plataforma.</div>
                         <div class="invalid-feedback">
                             Por favor, ingresa un nombre de usuario válido (3-20 caracteres).
@@ -142,7 +188,8 @@
                     <div class="mb-3">
                         <label for="email" class="form-label">Correo Electrónico</label>
                         <input type="email" class="form-control rounded-pill" name="email" id="email" required
-                               placeholder="ejemplo@dominio.com">
+                               placeholder="ejemplo@dominio.com"
+                               value="<?php echo htmlspecialchars($_POST['email'] ?? ''); ?>">
                         <div class="invalid-feedback">
                             Por favor, ingresa un correo electrónico válido.
                         </div>
@@ -183,7 +230,8 @@
                     </div>
 
                     <button type="submit" class="btn btn-primary w-100 rounded-pill" id="submitBtn">
-                        Registrarse
+                        <i class="bi bi-person-plus me-2"></i>
+                        Crear Cuenta
                     </button>
 
                     <div class="text-center mt-4">
@@ -200,6 +248,8 @@
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             const registerForm = document.getElementById('registerForm');
+            const usernameInput = document.getElementById('username');
+            const emailInput = document.getElementById('email');
             const passwordInput = document.getElementById('password');
             const confirmPasswordInput = document.getElementById('confirmPassword');
             const togglePassword = document.getElementById('togglePassword');
@@ -271,23 +321,66 @@
             confirmPasswordInput.addEventListener('input', function() {
                 if (this.value !== passwordInput.value && passwordInput.value) {
                     this.classList.add('is-invalid');
-                } else {
+                    this.classList.remove('is-valid');
+                } else if (this.value === passwordInput.value && passwordInput.value) {
                     this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-invalid', 'is-valid');
                 }
             });
 
-            // Validación del formulario
+            // Validación en tiempo real
+            usernameInput.addEventListener('input', function() {
+                const username = this.value.trim();
+                if (username.length >= 3 && username.length <= 20 && /^[a-zA-Z0-9_-]+$/.test(username)) {
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-valid');
+                }
+            });
+
+            emailInput.addEventListener('input', function() {
+                if (this.checkValidity()) {
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-valid');
+                }
+            });
+
+            passwordInput.addEventListener('input', function() {
+                const password = this.value;
+                const hasMinLength = password.length >= 8;
+                const hasUpperCase = /[A-Z]/.test(password);
+                const hasNumber = /[0-9]/.test(password);
+
+                if (hasMinLength && hasUpperCase && hasNumber) {
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-valid');
+                }
+            });
+
+            // Validación del formulario al enviar
             registerForm.addEventListener('submit', function(event) {
+                let hasErrors = false;
+
                 // Validar usuario
-                const username = document.getElementById('username');
-                if (username.value.trim().length < 3 || username.value.trim().length > 20) {
-                    username.classList.add('is-invalid');
+                const username = usernameInput.value.trim();
+                if (username.length < 3 || username.length > 20 || !/^[a-zA-Z0-9_-]+$/.test(username)) {
+                    usernameInput.classList.add('is-invalid');
+                    usernameInput.classList.remove('is-valid');
+                    hasErrors = true;
                 }
 
                 // Validar email
-                const email = document.getElementById('email');
-                if (!email.checkValidity()) {
-                    email.classList.add('is-invalid');
+                if (!emailInput.checkValidity()) {
+                    emailInput.classList.add('is-invalid');
+                    emailInput.classList.remove('is-valid');
+                    hasErrors = true;
                 }
 
                 // Validar contraseña
@@ -298,31 +391,39 @@
 
                 if (!hasMinLength || !hasUpperCase || !hasNumber) {
                     passwordInput.classList.add('is-invalid');
+                    passwordInput.classList.remove('is-valid');
+                    hasErrors = true;
                 }
 
                 // Validar confirmación
                 if (confirmPasswordInput.value !== passwordInput.value) {
                     confirmPasswordInput.classList.add('is-invalid');
+                    confirmPasswordInput.classList.remove('is-valid');
+                    hasErrors = true;
                 }
 
                 // Si hay errores, prevenir envío
-                if (registerForm.querySelectorAll('.is-invalid').length > 0) {
+                if (hasErrors) {
                     event.preventDefault();
                     event.stopPropagation();
+                    
+                    // Agregar animación shake a campos inválidos
+                    const invalidFields = registerForm.querySelectorAll('.is-invalid');
+                    invalidFields.forEach(field => {
+                        field.classList.add('shake-animation');
+                        setTimeout(() => field.classList.remove('shake-animation'), 500);
+                    });
                 } else {
+                    // Deshabilitar botón y mostrar loading
                     submitBtn.disabled = true;
-                    submitBtn.innerHTML = '<i class="bi bi-hourglass-top me-2"></i>Procesando...';
+                    submitBtn.innerHTML = '<i class="bi bi-hourglass-split me-2"></i>Creando cuenta...';
                 }
                 
                 registerForm.classList.add('was-validated');
             });
 
-            // Limpiar errores al escribir
-            ['username', 'email', 'password', 'confirmPassword'].forEach(id => {
-                document.getElementById(id).addEventListener('input', function() {
-                    this.classList.remove('is-invalid');
-                });
-            });
+            // Auto-focus en el primer campo
+            usernameInput.focus();
         });
     </script>
 </body>

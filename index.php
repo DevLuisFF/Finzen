@@ -1,5 +1,24 @@
 <?php
 // pagina raiz del sistema
+session_start();
+
+// Verificar si hay mensajes de error o éxito
+$login_error = $_SESSION['login_error'] ?? '';
+$login_success = $_SESSION['login_success'] ?? false;
+
+// Limpiar mensajes después de mostrarlos
+unset($_SESSION['login_error']);
+unset($_SESSION['login_success']);
+
+// Si ya está logueado, redirigir
+if (isset($_SESSION['user_id']) && $_SESSION['user_id'] > 0) {
+    switch ($_SESSION['rol_id'] ?? 2) {
+        case 1: header('Location: admin/index.php'); break;
+        case 2: header('Location: user/index.php'); break;
+        default: header('Location: user/index.php'); break;
+    }
+    exit();
+}
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -59,6 +78,30 @@
             text-decoration: none;
             font-size: 0.9rem;
         }
+        
+        .alert {
+            border-radius: 15px;
+            border: none;
+        }
+        
+        .shake-animation {
+            animation: shake 0.5s ease-in-out;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-5px); }
+            75% { transform: translateX(5px); }
+        }
+        
+        .success-animation {
+            animation: success 0.6s ease-in-out;
+        }
+        
+        @keyframes success {
+            0% { transform: scale(0.95); opacity: 0; }
+            100% { transform: scale(1); opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -71,11 +114,30 @@
                     <p class="text-muted">Ingresa tus credenciales para continuar</p>
                 </div>
 
+                <!-- Mostrar mensajes de error -->
+                <?php if (!empty($login_error)): ?>
+                    <div class="alert alert-danger alert-dismissible fade show shake-animation" role="alert">
+                        <i class="bi bi-exclamation-triangle-fill me-2"></i>
+                        <?php echo htmlspecialchars($login_error); ?>
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <?php endif; ?>
+
+                <!-- Mostrar mensaje de éxito (si se redirige desde logout, por ejemplo) -->
+                <?php if ($login_success): ?>
+                    <div class="alert alert-success alert-dismissible fade show success-animation" role="alert">
+                        <i class="bi bi-check-circle-fill me-2"></i>
+                        ¡Inicio de sesión exitoso!
+                        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+                    </div>
+                <?php endif; ?>
+
                 <form id="loginForm" method="POST" action="/auth/login.php" novalidate>
                     <div class="mb-3">
                         <label for="username" class="form-label">Usuario</label>
                         <input type="text" class="form-control rounded-pill" name="username" id="username" 
-                               placeholder="Ingresa tu usuario" required>
+                               placeholder="Ingresa tu usuario" required 
+                               value="<?php echo htmlspecialchars($_POST['username'] ?? ''); ?>">
                         <div class="invalid-feedback">
                             Por favor ingresa tu usuario
                         </div>
@@ -91,11 +153,14 @@
                     </div>
 
                     <div class="mb-3 form-check">
-                        <input type="checkbox" class="form-check-input" id="remember">
+                        <input type="checkbox" class="form-check-input" id="remember" name="remember">
                         <label class="form-check-label" for="remember">Recordarme</label>
                     </div>
 
-                    <button type="submit" class="btn btn-primary w-100 rounded-pill">Ingresar</button>
+                    <button type="submit" class="btn btn-primary w-100 rounded-pill">
+                        <i class="bi bi-box-arrow-in-right me-2"></i>
+                        Ingresar
+                    </button>
                 </form>
 
                 <div class="login-footer mt-4 text-center">
@@ -110,18 +175,53 @@
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     
     <script>
-        // Validación del formulario con Bootstrap
         document.addEventListener('DOMContentLoaded', function() {
             const form = document.getElementById('loginForm');
+            const usernameInput = document.getElementById('username');
+            const passwordInput = document.getElementById('password');
             
+            // Validación del formulario con Bootstrap
             form.addEventListener('submit', function(event) {
                 if (!form.checkValidity()) {
                     event.preventDefault();
                     event.stopPropagation();
+                    
+                    // Agregar animación shake a campos inválidos
+                    if (!usernameInput.checkValidity()) {
+                        usernameInput.classList.add('shake-animation');
+                        setTimeout(() => usernameInput.classList.remove('shake-animation'), 500);
+                    }
+                    
+                    if (!passwordInput.checkValidity()) {
+                        passwordInput.classList.add('shake-animation');
+                        setTimeout(() => passwordInput.classList.remove('shake-animation'), 500);
+                    }
                 }
                 
                 form.classList.add('was-validated');
             });
+
+            // Limpiar validación al escribir
+            usernameInput.addEventListener('input', function() {
+                if (this.checkValidity()) {
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-valid');
+                }
+            });
+
+            passwordInput.addEventListener('input', function() {
+                if (this.checkValidity()) {
+                    this.classList.remove('is-invalid');
+                    this.classList.add('is-valid');
+                } else {
+                    this.classList.remove('is-valid');
+                }
+            });
+
+            // Auto-focus en el campo de usuario
+            usernameInput.focus();
         });
     </script>
 </body>
