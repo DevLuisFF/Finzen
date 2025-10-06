@@ -166,18 +166,19 @@ class BudgetAlertsMetric extends MetricCalculator {
             FROM presupuestos p
             INNER JOIN (
                 SELECT 
-                    categoria_id,
-                    COALESCE(SUM(monto), 0) as gasto_actual
+                    t.categoria_id,
+                    COALESCE(SUM(t.monto), 0) as gasto_actual
                 FROM transacciones t
                 INNER JOIN categorias c ON t.categoria_id = c.id
                 WHERE t.usuario_id = ?
                 AND c.tipo = 'gasto'
                 AND t.fecha BETWEEN DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND CURDATE()
-                GROUP BY categoria_id
+                GROUP BY t.categoria_id
             ) g ON p.categoria_id = g.categoria_id
             WHERE p.usuario_id = ?
             AND (g.gasto_actual / p.monto) >= 0.8
             AND (g.gasto_actual / p.monto) < 1.0
+            AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
         ");
         $stmt->execute([$userId, $userId]);
         return $stmt->fetchColumn() ?? 0;
@@ -191,17 +192,18 @@ class OverBudgetMetric extends MetricCalculator {
             FROM presupuestos p
             INNER JOIN (
                 SELECT 
-                    categoria_id,
-                    COALESCE(SUM(monto), 0) as gasto_actual
+                    t.categoria_id,
+                    COALESCE(SUM(t.monto), 0) as gasto_actual
                 FROM transacciones t
                 INNER JOIN categorias c ON t.categoria_id = c.id
                 WHERE t.usuario_id = ?
                 AND c.tipo = 'gasto'
                 AND t.fecha BETWEEN DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND CURDATE()
-                GROUP BY categoria_id
+                GROUP BY t.categoria_id
             ) g ON p.categoria_id = g.categoria_id
             WHERE p.usuario_id = ?
             AND g.gasto_actual > p.monto
+            AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
         ");
         $stmt->execute([$userId, $userId]);
         return $stmt->fetchColumn() ?? 0;
@@ -217,21 +219,27 @@ class DetailedBudgetAlertsMetric extends MetricCalculator {
                 c.nombre as categoria_nombre,
                 c.color as categoria_color,
                 c.icono as categoria_icono,
-                COALESCE(SUM(t.monto), 0) as gastos_actuales,
-                (COALESCE(SUM(t.monto), 0) / p.monto) * 100 as porcentaje_uso
+                COALESCE(g.gasto_actual, 0) as gastos_actuales,
+                (COALESCE(g.gasto_actual, 0) / p.monto) * 100 as porcentaje_uso
             FROM presupuestos p
             INNER JOIN categorias c ON p.categoria_id = c.id
-            LEFT JOIN transacciones t ON p.categoria_id = t.categoria_id
-                AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE())
+            LEFT JOIN (
+                SELECT 
+                    categoria_id,
+                    COALESCE(SUM(monto), 0) as gasto_actual
+                FROM transacciones 
+                WHERE usuario_id = ?
+                AND fecha BETWEEN DATE_SUB(CURDATE(), INTERVAL 1 MONTH) AND CURDATE()
+                GROUP BY categoria_id
+            ) g ON p.categoria_id = g.categoria_id
             WHERE p.usuario_id = ?
             AND p.notificacion = 1
             AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
-            GROUP BY p.id, c.nombre, c.color, c.icono
             HAVING porcentaje_uso >= 80
             ORDER BY porcentaje_uso DESC
             LIMIT 5
         ");
-        $stmt->execute([$userId]);
+        $stmt->execute([$userId, $userId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
@@ -275,7 +283,7 @@ try {
     $recentTransactions = [];
     $monthlyFlow = ['labels' => [], 'ingresos' => [], 'gastos' => []];
     $expenseByCategory = ['labels' => [], 'data' => [], 'colors' => [], 'icons' => []];
-    $detailedBudgetAlerts = []; // NUEVO: alertas vacías por defecto
+    $detailedBudgetAlerts = [];
     $user_currency = 'PYG';
 }
 
@@ -549,6 +557,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
             background: linear-gradient(135deg, #fff 0%, #fff9e6 100%);
             border-radius: 0.75rem;
             margin-bottom: 0.75rem;
+            padding: 1rem;
         }
         
         .alert-budget.danger {
@@ -658,30 +667,32 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                         <h5 class="mb-0">Alertas de Presupuesto</h5>
                     </div>
                     <?php foreach ($detailedBudgetAlerts as $alert): ?>
-                        <div class="alert alert-budget <?= $alert['porcentaje_uso'] > 100 ? 'danger' : '' ?> d-flex align-items-center justify-content-between">
-                            <div class="d-flex align-items-center">
-                                <div class="transaction-icon me-3" style="background-color: <?= htmlspecialchars($alert['categoria_color']) ?>20; color: <?= htmlspecialchars($alert['categoria_color']) ?>;">
-                                    <i class="<?= getBootstrapIcon($alert['categoria_icono']) ?>"></i>
-                                </div>
-                                <div class="flex-grow-1">
-                                    <strong><?= htmlspecialchars($alert['categoria_nombre']) ?></strong> - 
-                                    <?= round($alert['porcentaje_uso']) ?>% usado 
-                                    (<?= formatMoney($alert['gastos_actuales'], $user_currency) ?> de <?= formatMoney($alert['monto'], $user_currency) ?>)
-                                    
-                                    <!-- Barra de progreso -->
-                                    <div class="progress-container">
-                                        <div class="progress-bar <?= $alert['porcentaje_uso'] > 100 ? 'progress-danger' : ($alert['porcentaje_uso'] > 80 ? 'progress-warning' : 'progress-success') ?>" 
-                                             style="width: <?= min(100, $alert['porcentaje_uso']) ?>%">
+                        <div class="alert-budget <?= $alert['porcentaje_uso'] > 100 ? 'danger' : '' ?>">
+                            <div class="d-flex align-items-center justify-content-between">
+                                <div class="d-flex align-items-center">
+                                    <div class="transaction-icon me-3" style="background-color: <?= htmlspecialchars($alert['categoria_color']) ?>20; color: <?= htmlspecialchars($alert['categoria_color']) ?>;">
+                                        <i class="<?= getBootstrapIcon($alert['categoria_icono']) ?>"></i>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <strong><?= htmlspecialchars($alert['categoria_nombre']) ?></strong> - 
+                                        <?= round($alert['porcentaje_uso']) ?>% usado 
+                                        (<?= formatMoney($alert['gastos_actuales'], $user_currency) ?> de <?= formatMoney($alert['monto'], $user_currency) ?>)
+                                        
+                                        <!-- Barra de progreso -->
+                                        <div class="progress-container">
+                                            <div class="progress-bar <?= $alert['porcentaje_uso'] > 100 ? 'progress-danger' : ($alert['porcentaje_uso'] > 80 ? 'progress-warning' : 'progress-success') ?>" 
+                                                 style="width: <?= min(100, $alert['porcentaje_uso']) ?>%">
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                            <div>
-                                <?php if ($alert['porcentaje_uso'] > 100): ?>
-                                    <span class="badge bg-danger">Excedido</span>
-                                <?php else: ?>
-                                    <span class="badge bg-warning">Cerca del límite</span>
-                                <?php endif; ?>
+                                <div>
+                                    <?php if ($alert['porcentaje_uso'] > 100): ?>
+                                        <span class="badge bg-danger">Excedido</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-warning">Cerca del límite</span>
+                                    <?php endif; ?>
+                                </div>
                             </div>
                         </div>
                     <?php endforeach; ?>
@@ -921,7 +932,7 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
                                 <tr class="transaction-item">
                                     <td>
                                         <div class="fw-medium"><?= htmlspecialchars(date('d M', strtotime($t['fecha']))) ?></div>
-                                        <small class="text-muted"><?= htmlspecialchars(date('H:i', strtotime($t['fecha']))) ?></small>
+                                        <small class="text-muted"><?= htmlspecialchars(date('Y', strtotime($t['fecha']))) ?></small>
                                     </td>
                                     <td class="fw-medium">
                                         <div class="d-flex align-items-center">

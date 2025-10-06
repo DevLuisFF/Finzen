@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 04-10-2025 a las 01:17:31
+-- Tiempo de generación: 06-10-2025 a las 06:57:47
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -46,9 +46,10 @@ INSERT INTO `categorias` (`id`, `usuario_id`, `nombre`, `tipo`, `icono`, `color`
 (2, 1, 'test', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-09-15 01:07:00', '2025-09-28 17:38:00'),
 (3, 1, 'transporte', 'gasto', 'bi-car-front', '#FF6384', '2025-09-28 16:35:58', '2025-09-28 17:37:48'),
 (4, 1, 'servicios', 'gasto', 'bi-phone', '#FF6384', '2025-09-29 18:03:46', '2025-09-30 02:44:53'),
-(5, 3, 'Salario', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-09-30 04:11:57', '2025-09-30 04:11:57'),
 (6, 1, 'test3', 'ingreso', 'bi-cash-coin', '#FF6384', '2025-10-01 23:02:40', '2025-10-01 23:02:40'),
-(7, 1, 'Alquiler', 'gasto', 'bi-house', '#9966FF', '2025-10-01 23:17:59', '2025-10-01 23:17:59');
+(7, 1, 'Alquiler', 'gasto', 'bi-house', '#9966FF', '2025-10-01 23:17:59', '2025-10-01 23:17:59'),
+(8, 3, 'Salario', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-10-06 02:59:05', '2025-10-06 02:59:05'),
+(9, 3, 'Transporte Publico', 'gasto', 'bi-car-front', '#FF6384', '2025-10-06 04:23:47', '2025-10-06 04:23:56');
 
 --
 -- Disparadores `categorias`
@@ -126,7 +127,8 @@ CREATE TABLE `presupuestos` (
 
 INSERT INTO `presupuestos` (`id`, `usuario_id`, `categoria_id`, `monto`, `periodo`, `fecha_inicio`, `fecha_fin`, `notificacion`, `creado_en`, `actualizado_en`) VALUES
 (6, 1, 3, 200000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:04:23', '2025-09-30 03:14:10'),
-(7, 1, 4, 500000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:37:08', '2025-09-30 00:37:08');
+(7, 1, 4, 500000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:37:08', '2025-09-30 00:37:08'),
+(8, 3, 9, 10000000, 'mensual', '2025-10-06', '2025-11-06', 1, '2025-10-06 04:47:53', '2025-10-06 04:47:53');
 
 --
 -- Disparadores `presupuestos`
@@ -134,17 +136,6 @@ INSERT INTO `presupuestos` (`id`, `usuario_id`, `categoria_id`, `monto`, `period
 DELIMITER $$
 CREATE TRIGGER `trg_actualizar_timestamp_presupuestos` BEFORE UPDATE ON `presupuestos` FOR EACH ROW BEGIN
     SET NEW.actualizado_en = CURRENT_TIMESTAMP;
-END
-$$
-DELIMITER ;
-DELIMITER $$
-CREATE TRIGGER `trg_auto_limpiar_presupuestos_expirados` BEFORE INSERT ON `presupuestos` FOR EACH ROW BEGIN
-    -- Eliminar presupuestos expirados del mismo usuario y categoría
-    DELETE FROM presupuestos 
-    WHERE usuario_id = NEW.usuario_id 
-    AND categoria_id = NEW.categoria_id
-    AND fecha_fin IS NOT NULL 
-    AND fecha_fin < CURDATE();
 END
 $$
 DELIMITER ;
@@ -328,15 +319,7 @@ CREATE TABLE `transacciones` (
 --
 
 INSERT INTO `transacciones` (`id`, `usuario_id`, `categoria_id`, `monto`, `descripcion`, `fecha`, `recurrente`, `creado_en`, `actualizado_en`) VALUES
-(1, 0, 2, 1000, 'una prueba', '2025-09-15', 0, '2025-09-15 01:16:23', '2025-09-15 01:16:23'),
-(2, 0, 3, 10000, '', '2025-09-28', 0, '2025-09-28 16:36:17', '2025-09-28 16:36:17'),
-(3, 0, 2, 100000, '', '2025-09-28', 0, '2025-09-28 16:42:25', '2025-09-28 16:42:25'),
-(4, 0, 3, 100000, '', '2025-09-28', 0, '2025-09-28 16:42:54', '2025-09-28 16:42:54'),
-(5, 0, 3, 100000, 'Testing', '2025-09-30', 0, '2025-09-30 00:38:20', '2025-09-30 00:38:20'),
-(6, 0, 5, 1000000, 'Ingresos', '2025-09-30', 0, '2025-09-30 04:12:43', '2025-09-30 04:12:43'),
-(7, 0, 4, 100000, 'un gasto', '2025-10-02', 0, '2025-10-01 23:11:12', '2025-10-01 23:11:12'),
-(8, 0, 7, 100000000, 'pago alquiler agosto', '2025-10-02', 0, '2025-10-01 23:20:07', '2025-10-01 23:20:07'),
-(11, 0, 4, 300000000, 'serv', '2025-10-02', 0, '2025-10-01 23:24:56', '2025-10-01 23:24:56');
+(12, 3, 8, 300000000, 'Salario mensual', '2025-10-06', 0, '2025-10-06 03:13:07', '2025-10-06 03:13:07');
 
 --
 -- Disparadores `transacciones`
@@ -700,7 +683,7 @@ CREATE TABLE `usuarios` (
 INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `saldo`, `moneda`, `activo`, `creado_en`, `actualizado_en`) VALUES
 (1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 0, 'PYG', 1, '2025-09-15 01:18:33', '2025-10-03 22:30:45'),
 (2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 1, 0, 'PYG', 1, '2025-09-15 02:07:33', '2025-10-03 22:30:45'),
-(3, 'demo', 'demoemail@gmail.com', '$2y$10$1n9MPXZnFKf.kNBZaC28repW//jfwnmiH.ouemmKAcFRbXMZv2aL2', 2, 0, 'PYG', 1, '2025-09-29 17:05:41', '2025-10-03 22:30:45');
+(3, 'demo', 'demoemail@gmail.com', '$2y$10$1n9MPXZnFKf.kNBZaC28repW//jfwnmiH.ouemmKAcFRbXMZv2aL2', 2, 300000000, 'PYG', 1, '2025-09-29 17:05:41', '2025-10-06 03:13:07');
 
 --
 -- Disparadores `usuarios`
@@ -816,13 +799,13 @@ ALTER TABLE `usuarios`
 -- AUTO_INCREMENT de la tabla `categorias`
 --
 ALTER TABLE `categorias`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
 
 --
 -- AUTO_INCREMENT de la tabla `presupuestos`
 --
 ALTER TABLE `presupuestos`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
 
 --
 -- AUTO_INCREMENT de la tabla `roles`
@@ -834,7 +817,7 @@ ALTER TABLE `roles`
 -- AUTO_INCREMENT de la tabla `transacciones`
 --
 ALTER TABLE `transacciones`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=12;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT de la tabla `usuarios`

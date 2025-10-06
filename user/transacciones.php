@@ -9,24 +9,69 @@ $db = Conexion::obtenerInstancia()->obtenerConexion();
 $usuario_id = $_SESSION["user_id"];
 
 // Función para formatear dinero
-function formatMoney($amount) {
-    return 'Gs ' . number_format($amount / 100, 0, ',', '.');
+function formatMoney($amount, $moneda = 'PYG') {
+    $symbols = [
+        'PYG' => 'Gs ',
+        'USD' => '$ ',
+        'EUR' => '€ '
+    ];
+    $symbol = $symbols[$moneda] ?? 'Gs ';
+    return $symbol . number_format($amount / 100, 0, ',', '.');
 }
 
 // Función para convertir entrada de dinero a centavos
 function parseMoneyInput($input) {
-    // Remover caracteres no numéricos excepto puntos
     $clean = preg_replace('/[^\d.]/', '', $input);
-    // Convertir a float y luego a centavos
     return (int)round(floatval(str_replace('.', '', $clean)) * 100);
+}
+
+// Función para validar monto con mensajes de error amigables
+function validarMontoTransaccion($monto, $saldoUsuario, $moneda, $esGasto = false) {
+    $montoNumerico = parseMoneyInput($monto);
+
+    if ($montoNumerico <= 0) {
+        return "El monto debe ser mayor a cero";
+    }
+
+    if ($montoNumerico > 1000000000000) {
+        return "El monto es demasiado alto. Por favor, verifica el valor ingresado";
+    }
+
+    if ($esGasto && $montoNumerico > $saldoUsuario) {
+        $faltante = $montoNumerico - $saldoUsuario;
+        return "Saldo insuficiente. Disponible: " . formatMoney($saldoUsuario, $moneda) .
+               ". Faltan: " . formatMoney($faltante, $moneda);
+    }
+
+    return null;
+}
+
+// Función para validar fecha según triggers de la base de datos
+function validarFechaTransaccion($fecha) {
+    $fechaTransaccion = new DateTime($fecha);
+    $fechaActual = new DateTime();
+    $fechaUnAnioAtras = (new DateTime())->modify('-1 year');
+    $fechaSieteDiasDespues = (new DateTime())->modify('+7 days');
+
+    if ($fechaTransaccion < $fechaUnAnioAtras) {
+        return "No se pueden registrar transacciones con más de 1 año de antigüedad";
+    }
+
+    if ($fechaTransaccion > $fechaSieteDiasDespues) {
+        return "No se pueden registrar transacciones con más de 7 días de anticipación";
+    }
+
+    return null;
 }
 
 // Clase para manejar transacciones
 class TransactionRepository {
     private $db;
+
     public function __construct($db) {
         $this->db = $db;
     }
+
     public function getAll($userId, $filters = [], $limit = 10, $offset = 0) {
         $query = "
             SELECT t.*,
@@ -39,7 +84,7 @@ class TransactionRepository {
             WHERE t.usuario_id = :usuario_id
         ";
         $params = [':usuario_id' => $userId];
-        // Aplicar filtros
+
         if (!empty($filters['categoria_id'])) {
             $query .= " AND t.categoria_id = :categoria_id";
             $params[':categoria_id'] = $filters['categoria_id'];
@@ -56,7 +101,7 @@ class TransactionRepository {
             $query .= " AND t.fecha <= :fecha_hasta";
             $params[':fecha_hasta'] = $filters['fecha_hasta'];
         }
-        // Contar total para paginación
+
         $countQuery = "SELECT COUNT(*) FROM ($query) AS filtered";
         $countStmt = $this->db->prepare($countQuery);
         foreach ($params as $key => $value) {
@@ -64,23 +109,26 @@ class TransactionRepository {
         }
         $countStmt->execute();
         $total = $countStmt->fetchColumn();
-        // Aplicar orden y paginación
+
         $query .= " ORDER BY t.fecha DESC, t.creado_en DESC LIMIT :limit OFFSET :offset";
         $stmt = $this->db->prepare($query);
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->bindValue(':offset', $offset, PDO::PARAM_INT);
+
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
         }
+
         $stmt->execute();
         return [
             'data' => $stmt->fetchAll(),
             'total' => $total
         ];
     }
+
     public function getStats($userId, $filters = []) {
         $query = "
-            SELECT 
+            SELECT
                 COUNT(*) as total_transacciones,
                 COALESCE(SUM(CASE WHEN cat.tipo = 'ingreso' THEN t.monto ELSE 0 END), 0) as total_ingresos,
                 COALESCE(SUM(CASE WHEN cat.tipo = 'gasto' THEN t.monto ELSE 0 END), 0) as total_gastos,
@@ -90,7 +138,7 @@ class TransactionRepository {
             WHERE t.usuario_id = :usuario_id
         ";
         $params = [':usuario_id' => $userId];
-        // Aplicar filtros
+
         if (!empty($filters['categoria_id'])) {
             $query .= " AND t.categoria_id = :categoria_id";
             $params[':categoria_id'] = $filters['categoria_id'];
@@ -107,6 +155,7 @@ class TransactionRepository {
             $query .= " AND t.fecha <= :fecha_hasta";
             $params[':fecha_hasta'] = $filters['fecha_hasta'];
         }
+
         $stmt = $this->db->prepare($query);
         foreach ($params as $key => $value) {
             $stmt->bindValue($key, $value);
@@ -114,6 +163,7 @@ class TransactionRepository {
         $stmt->execute();
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
+
     public function create($data) {
         $stmt = $this->db->prepare("
             INSERT INTO transacciones
@@ -124,6 +174,7 @@ class TransactionRepository {
         $data['usuario_id'] = $_SESSION["user_id"];
         return $stmt->execute($data);
     }
+
     public function update($id, $data) {
         $data['id'] = $id;
         $stmt = $this->db->prepare("
@@ -138,6 +189,7 @@ class TransactionRepository {
         $data['usuario_id'] = $_SESSION["user_id"];
         return $stmt->execute($data);
     }
+
     public function delete($id, $userId) {
         $stmt = $this->db->prepare("
             DELETE FROM transacciones
@@ -145,21 +197,46 @@ class TransactionRepository {
         ");
         return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
-    
-    // Función para obtener el saldo actual del usuario
+
     public function getSaldoActual($userId) {
-        $stmt = $this->db->prepare("SELECT saldo FROM usuarios WHERE id = ?");
+        $stmt = $this->db->prepare("SELECT saldo, moneda FROM usuarios WHERE id = ?");
         $stmt->execute([$userId]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $result ? $result['saldo'] : 0;
+        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
-    
-    // Función para verificar si una categoría es de gasto
+
     public function esCategoriaGasto($categoriaId) {
         $stmt = $this->db->prepare("SELECT tipo FROM categorias WHERE id = ?");
         $stmt->execute([$categoriaId]);
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
         return $result && $result['tipo'] === 'gasto';
+    }
+
+    public function verificarPresupuesto($userId, $categoriaId, $monto, $fecha) {
+        $stmt = $this->db->prepare("
+            SELECT
+                p.monto as presupuesto,
+                COALESCE(SUM(t.monto), 0) as gasto_actual,
+                (COALESCE(SUM(t.monto), 0) + :monto) as nuevo_gasto,
+                ((COALESCE(SUM(t.monto), 0) + :monto) / p.monto) * 100 as porcentaje
+            FROM presupuestos p
+            LEFT JOIN transacciones t ON p.categoria_id = t.categoria_id
+                AND t.fecha BETWEEN p.fecha_inicio AND COALESCE(p.fecha_fin, CURDATE())
+                AND YEAR(t.fecha) = YEAR(:fecha)
+                AND MONTH(t.fecha) = MONTH(:fecha)
+            WHERE p.usuario_id = :usuario_id
+            AND p.categoria_id = :categoria_id
+            AND (p.fecha_fin IS NULL OR p.fecha_fin >= CURDATE())
+            GROUP BY p.id, p.monto
+        ");
+
+        $stmt->execute([
+            ':usuario_id' => $userId,
+            ':categoria_id' => $categoriaId,
+            ':monto' => $monto,
+            ':fecha' => $fecha
+        ]);
+
+        return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 }
 
@@ -167,23 +244,28 @@ class TransactionRepository {
 $transactionRepo = new TransactionRepository($db);
 $error = '';
 $success = '';
+$warning = '';
 
 // Obtener categorías del usuario
 $stmtCategorias = $db->prepare("
-    SELECT id, nombre, tipo, color, icono 
-    FROM categorias 
-    WHERE usuario_id = :usuario_id 
+    SELECT id, nombre, tipo, color, icono
+    FROM categorias
+    WHERE usuario_id = :usuario_id
     ORDER BY tipo, nombre
 ");
 $stmtCategorias->bindValue(":usuario_id", $usuario_id, PDO::PARAM_INT);
 $stmtCategorias->execute();
 $categorias = $stmtCategorias->fetchAll();
 
-// Tipos de transacciones según esquema
 $tipos = [
     "ingreso" => "Ingreso",
     "gasto" => "Gasto",
 ];
+
+// Obtener información del usuario
+$user_data = $transactionRepo->getSaldoActual($usuario_id);
+$saldoActual = $user_data['saldo'];
+$user_currency = $user_data['moneda'];
 
 // Procesar operaciones CRUD
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
@@ -193,65 +275,90 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
         'descripcion' => trim($_POST["descripcion"] ?? ""),
         'fecha' => $_POST["fecha"] ?? date("Y-m-d")
     ];
-    
+
     try {
-        if (isset($_POST["create"]) && $data['categoria_id']) {
-            // Verificar saldo antes de intentar la transacción
-            $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
-            $esGasto = $transactionRepo->esCategoriaGasto($data['categoria_id']);
-            
-            if ($esGasto && $data['monto'] > $saldoActual) {
-                $error = 'Saldo insuficiente para realizar este gasto. ';
-                $error .= 'Saldo disponible: ' . formatMoney($saldoActual) . '. ';
-                $error .= 'Monto del gasto: ' . formatMoney($data['monto']) . '. ';
-                $error .= 'Faltan: ' . formatMoney($data['monto'] - $saldoActual);
-            } else {
-                $transactionRepo->create($data);
-                $_SESSION['success'] = 'Transacción creada exitosamente';
-                header("Location: " . $_SERVER["PHP_SELF"], true, 303);
-                exit();
-            }
+        $esGasto = $transactionRepo->esCategoriaGasto($data['categoria_id']);
+
+        $montoError = validarMontoTransaccion($_POST["monto"] ?? "0", $saldoActual, $user_currency, $esGasto);
+        if ($montoError) {
+            throw new Exception($montoError);
         }
-        
+
+        $fechaError = validarFechaTransaccion($data['fecha']);
+        if ($fechaError) {
+            throw new Exception($fechaError);
+        }
+
+        if (isset($_POST["create"]) && $data['categoria_id']) {
+            if ($esGasto) {
+                $infoPresupuesto = $transactionRepo->verificarPresupuesto($usuario_id, $data['categoria_id'], $data['monto'], $data['fecha']);
+
+                if ($infoPresupuesto && $infoPresupuesto['nuevo_gasto'] > $infoPresupuesto['presupuesto']) {
+                    throw new Exception("Esta transacción excede el presupuesto mensual asignado para esta categoría. " .
+                                      "Presupuesto: " . formatMoney($infoPresupuesto['presupuesto'], $user_currency) .
+                                      ", Gastado: " . formatMoney($infoPresupuesto['gasto_actual'], $user_currency));
+                }
+
+                if ($infoPresupuesto && $infoPresupuesto['porcentaje'] > 80) {
+                    $_SESSION['warning'] = "⚠️ Advertencia: Esta transacción hará que uses el " .
+                                          round($infoPresupuesto['porcentaje']) .
+                                          "% de tu presupuesto mensual para esta categoría";
+                }
+            }
+
+            $transactionRepo->create($data);
+            $_SESSION['success'] = '✅ Transacción creada exitosamente';
+            header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+            exit();
+        }
+
         if (isset($_POST["update"]) && isset($_POST["id"])) {
             $data['id'] = $_POST["id"];
-            
-            // Verificar saldo antes de actualizar la transacción
-            $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
-            $esGasto = $transactionRepo->esCategoriaGasto($data['categoria_id']);
-            
-            if ($esGasto && $data['monto'] > $saldoActual) {
-                $error = 'Saldo insuficiente para actualizar a este gasto. ';
-                $error .= 'Saldo disponible: ' . formatMoney($saldoActual) . '. ';
-                $error .= 'Monto del gasto: ' . formatMoney($data['monto']) . '. ';
-                $error .= 'Faltan: ' . formatMoney($data['monto'] - $saldoActual);
-            } else {
-                $transactionRepo->update($data['id'], $data);
-                $_SESSION['success'] = 'Transacción actualizada exitosamente';
-                header("Location: " . $_SERVER["PHP_SELF"], true, 303);
-                exit();
-            }
+            $transactionRepo->update($data['id'], $data);
+            $_SESSION['success'] = '✅ Transacción actualizada exitosamente';
+            header("Location: " . $_SERVER["PHP_SELF"], true, 303);
+            exit();
         }
     } catch (PDOException $e) {
-        // Capturar errores específicos de la base de datos
-        if (strpos($e->getMessage(), 'Saldo insuficiente') !== false) {
-            $error = 'Saldo insuficiente para realizar esta operación. ';
-            $error .= 'Por favor, verifique su saldo disponible antes de registrar gastos.';
-        } else if (strpos($e->getMessage(), 'presupuesto mensual') !== false) {
-            $error = 'Esta transacción excede el presupuesto mensual asignado para esta categoría.';
+        $errorMessage = $e->getMessage();
+
+        if (strpos($errorMessage, 'Saldo insuficiente') !== false) {
+            $error = '❌ Saldo insuficiente para realizar esta operación.';
+        } else if (strpos($errorMessage, 'presupuesto mensual') !== false) {
+            $error = '❌ Esta transacción excede el presupuesto mensual asignado para esta categoría.';
+        } else if (strpos($errorMessage, 'Transacción duplicada') !== false) {
+            $error = '❌ Transacción duplicada detectada.';
+        } else if (strpos($errorMessage, 'fecha de la transacción') !== false) {
+            $error = '❌ La fecha de la transacción no puede ser futura.';
+        } else if (strpos($errorMessage, 'más de 1 año') !== false) {
+            $error = '❌ No se pueden registrar transacciones con más de 1 año de antigüedad.';
+        } else if (strpos($errorMessage, 'más de 7 días') !== false) {
+            $error = '❌ No se pueden registrar transacciones con más de 7 días de anticipación.';
+        } else if (strpos($errorMessage, 'debe ser mayor a 0') !== false) {
+            $error = '❌ El monto debe ser mayor a cero.';
+        } else if (strpos($errorMessage, 'Gasto demasiado elevado') !== false) {
+            $error = '❌ El gasto es demasiado elevado en relación a su saldo actual.';
         } else {
-            $error = 'Error al procesar la operación: ' . $e->getMessage();
+            $error = '❌ Error del sistema: ' . $errorMessage;
         }
     } catch (Exception $e) {
-        $error = 'Error al procesar la operación: ' . $e->getMessage();
+        $error = '❌ ' . $e->getMessage();
     }
 }
 
 // Eliminar transacción
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
-    $transactionRepo->delete($id, $usuario_id);
-    $_SESSION['success'] = 'Transacción eliminada exitosamente';
+    try {
+        $transactionRepo->delete($id, $usuario_id);
+        $_SESSION['success'] = '✅ Transacción eliminada exitosamente';
+    } catch (PDOException $e) {
+        if (strpos($e->getMessage(), 'No se puede eliminar') !== false) {
+            $_SESSION['error'] = '❌ No se puede eliminar la transacción.';
+        } else {
+            $_SESSION['error'] = '❌ Error al eliminar la transacción: ' . $e->getMessage();
+        }
+    }
     header("Location: " . $_SERVER["PHP_SELF"], true, 303);
     exit();
 }
@@ -264,6 +371,10 @@ if (isset($_SESSION['success'])) {
 if (isset($_SESSION['error'])) {
     $error = $_SESSION['error'];
     unset($_SESSION['error']);
+}
+if (isset($_SESSION['warning'])) {
+    $warning = $_SESSION['warning'];
+    unset($_SESSION['warning']);
 }
 
 // Obtener filtros de la URL
@@ -292,19 +403,16 @@ $stats = $transactionRepo->getStats($usuario_id, $filters);
 function exportToCSV($data, $filename) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $filename . '.csv"');
-    
+
     $output = fopen('php://output', 'w');
-    
-    // Escribir encabezados
+
     if (!empty($data)) {
         fputcsv($output, array_keys($data[0]));
-        
-        // Escribir datos
         foreach ($data as $row) {
             fputcsv($output, $row);
         }
     }
-    
+
     fclose($output);
     exit();
 }
@@ -312,7 +420,7 @@ function exportToCSV($data, $filename) {
 // Manejar exportación de transacciones
 if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     $stmt = $db->prepare("
-        SELECT 
+        SELECT
             t.fecha,
             t.descripcion,
             cat.nombre as categoria,
@@ -325,18 +433,15 @@ if (isset($_GET['export']) && $_GET['export'] === 'transacciones') {
     ");
     $stmt->execute([$usuario_id]);
     $exportData = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Formatear datos para exportación
+
     foreach ($exportData as &$row) {
-        $row['monto'] = formatMoney($row['monto']);
+        $row['monto'] = formatMoney($row['monto'], $user_currency);
     }
-    
+
     exportToCSV($exportData, 'transacciones_' . date('Y-m-d'));
 }
-
-// Obtener saldo actual para mostrar en la interfaz
-$saldoActual = $transactionRepo->getSaldoActual($usuario_id);
 ?>
+
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -358,27 +463,27 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             --bs-dark: #212529;
             --bs-border: #e9ecef;
         }
-        
+
         body {
             font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
             background-color: #fafbfc;
             color: #333;
             line-height: 1.5;
         }
-        
+
         .navbar {
             background: rgba(255, 255, 255, 0.95);
             backdrop-filter: blur(10px);
             border-bottom: 1px solid var(--bs-border);
             padding: 0.75rem 0;
         }
-        
+
         .navbar-brand {
             font-weight: 700;
             font-size: 1.5rem;
             color: var(--bs-primary) !important;
         }
-        
+
         .nav-link {
             font-weight: 500;
             padding: 0.5rem 1rem !important;
@@ -386,12 +491,12 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             transition: all 0.2s ease;
             color: #666 !important;
         }
-        
+
         .nav-link:hover, .nav-link.active {
             background-color: rgba(var(--bs-primary-rgb), 0.1);
             color: var(--bs-primary) !important;
         }
-        
+
         .card {
             border: none;
             border-radius: 1rem;
@@ -400,33 +505,33 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             background: white;
             overflow: hidden;
         }
-        
+
         .card:hover {
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
             transform: translateY(-2px);
         }
-        
+
         .stats-card {
             border-left: 4px solid;
             position: relative;
         }
-        
+
         .stats-card.primary {
             border-left-color: var(--bs-primary);
         }
-        
+
         .stats-card.success {
             border-left-color: var(--bs-success);
         }
-        
+
         .stats-card.danger {
             border-left-color: var(--bs-danger);
         }
-        
+
         .stats-card.warning {
             border-left-color: var(--bs-warning);
         }
-        
+
         .metric-icon {
             width: 48px;
             height: 48px;
@@ -437,31 +542,31 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             margin-right: 1rem;
             font-size: 1.25rem;
         }
-        
+
         .badge-custom {
             font-size: 0.75rem;
             padding: 0.375rem 0.75rem;
             border-radius: 0.75rem;
             font-weight: 500;
         }
-        
+
         .btn {
             border-radius: 0.75rem;
             font-weight: 500;
             padding: 0.5rem 1.25rem;
             transition: all 0.2s ease;
         }
-        
+
         .btn-sm {
             padding: 0.375rem 0.875rem;
             font-size: 0.875rem;
         }
-        
+
         .table {
             border-radius: 1rem;
             overflow: hidden;
         }
-        
+
         .table th {
             border: none;
             background-color: var(--bs-light);
@@ -472,27 +577,27 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        
+
         .table td {
             border: none;
             padding: 1rem;
             vertical-align: middle;
         }
-        
+
         .table tbody tr {
             border-bottom: 1px solid var(--bs-border);
             transition: all 0.2s ease;
         }
-        
+
         .table tbody tr:hover {
             background-color: rgba(0, 0, 0, 0.02);
             transform: translateX(4px);
         }
-        
+
         .table tbody tr:last-child {
             border-bottom: none;
         }
-        
+
         .category-icon {
             width: 40px;
             height: 40px;
@@ -504,70 +609,70 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             color: white;
             font-size: 1rem;
         }
-        
+
         .amount.ingreso {
             color: var(--bs-success);
             font-weight: 600;
         }
-        
+
         .amount.gasto {
             color: var(--bs-danger);
             font-weight: 600;
         }
-        
+
         h1, h2, h3, h4, h5, h6 {
             font-weight: 700;
             color: var(--bs-dark);
         }
-        
+
         .card-title {
             font-weight: 600;
             color: var(--bs-dark);
             margin-bottom: 1.5rem;
         }
-        
+
         .container {
             max-width: 1400px;
         }
-        
+
         .modal-content {
             border: none;
             border-radius: 1rem;
             box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
         }
-        
+
         .modal-header {
             border-bottom: 1px solid var(--bs-border);
             padding: 1.5rem;
         }
-        
+
         .modal-body {
             padding: 1.5rem;
         }
-        
+
         .modal-footer {
             border-top: 1px solid var(--bs-border);
             padding: 1.5rem;
         }
-        
+
         .form-control, .form-select {
             border-radius: 0.75rem;
             border: 1px solid var(--bs-border);
             padding: 0.75rem 1rem;
             transition: all 0.2s ease;
         }
-        
+
         .form-control:focus, .form-select:focus {
             border-color: var(--bs-primary);
             box-shadow: 0 0 0 0.2rem rgba(var(--bs-primary-rgb), 0.1);
         }
-        
+
         .alert {
             border: none;
             border-radius: 0.75rem;
             padding: 1rem 1.25rem;
         }
-        
+
         .pagination .page-link {
             border: none;
             border-radius: 0.5rem;
@@ -575,58 +680,46 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             color: #666;
             font-weight: 500;
         }
-        
+
         .pagination .page-item.active .page-link {
             background-color: var(--bs-primary);
             color: white;
         }
-        
+
         .pagination .page-link:hover {
             background-color: rgba(var(--bs-primary-rgb), 0.1);
             color: var(--bs-primary);
         }
-        
+
         .empty-state {
             padding: 3rem 1rem;
             text-align: center;
             color: #6c757d;
         }
-        
+
         .empty-state i {
             font-size: 3rem;
             margin-bottom: 1rem;
             opacity: 0.5;
         }
-        
-        .dropdown-menu {
-            border: none;
-            border-radius: 0.75rem;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            padding: 0.5rem;
+
+        .transaction-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
         }
-        
-        .dropdown-item {
-            border-radius: 0.5rem;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
-        }
-        
-        .dropdown-item:hover {
-            background-color: rgba(var(--bs-primary-rgb), 0.1);
-            color: var(--bs-primary);
-        }
-        
-        .transaction-icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
+
+        .btn-action-individual {
+            width: 32px;
+            height: 32px;
             display: flex;
             align-items: center;
             justify-content: center;
-            margin-right: 12px;
-            font-size: 1rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            transition: all 0.2s ease;
         }
-        
+
         .saldo-info {
             background: var(--bs-primary);
             color: white;
@@ -634,32 +727,73 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             padding: 1.5rem;
             margin-bottom: 1.5rem;
         }
-        
+
         .saldo-info h3 {
             color: white;
             margin-bottom: 0.5rem;
         }
-        
+
         .saldo-info .badge {
             background: rgba(255, 255, 255, 0.2);
             color: white;
             font-size: 0.875rem;
         }
-        
+
+        .money-input {
+            text-align: right;
+            font-family: 'Courier New', monospace;
+            font-weight: 600;
+        }
+
+        .money-input::placeholder {
+            font-weight: normal;
+        }
+
+        .presupuesto-alert {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            border: 1px solid #ffecb5;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            margin-top: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .validation-message {
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+        }
+
+        .validation-success {
+            color: var(--bs-success);
+        }
+
+        .validation-error {
+            color: var(--bs-danger);
+        }
+
         @media (max-width: 768px) {
             .container {
                 padding-left: 1rem;
                 padding-right: 1rem;
             }
-            
+
             .table-responsive {
                 font-size: 0.875rem;
             }
-            
-            .category-icon, .transaction-icon {
+
+            .category-icon {
                 width: 32px;
                 height: 32px;
                 margin-right: 8px;
+            }
+
+            .transaction-actions {
+                flex-direction: column;
+            }
+
+            .btn-action-individual {
+                width: 36px;
+                height: 36px;
             }
         }
     </style>
@@ -714,6 +848,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             </div>
         </div>
     </nav>
+
     <!-- Main Content -->
     <div class="container py-4">
         <div class="d-flex justify-content-between align-items-center mb-4">
@@ -725,12 +860,12 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 <i class="bi bi-plus-circle me-1"></i> Nueva Transacción
             </button>
         </div>
-        
+
         <!-- Información de saldo -->
         <div class="saldo-info">
             <div class="row align-items-center">
                 <div class="col-md-8">
-                    <h3 class="mb-1"><?= formatMoney($saldoActual) ?></h3>
+                    <h3 class="mb-1"><?= formatMoney($saldoActual, $user_currency) ?></h3>
                     <p class="mb-0">Saldo disponible actual</p>
                 </div>
                 <div class="col-md-4 text-end">
@@ -740,7 +875,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 </div>
             </div>
         </div>
-        
+
         <!-- Alertas -->
         <?php if (!empty($success)): ?>
             <div class="alert alert-success alert-dismissible fade show" role="alert">
@@ -749,14 +884,23 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         <?php endif; ?>
-        <?php if (!empty($error)): ?>
-            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+
+        <?php if (!empty($warning)): ?>
+            <div class="alert alert-warning alert-dismissible fade show" role="alert">
                 <i class="bi bi-exclamation-triangle me-2"></i>
-                <strong>Error:</strong> <?= htmlspecialchars($error) ?>
+                <?= htmlspecialchars($warning) ?>
                 <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
             </div>
         <?php endif; ?>
-        
+
+        <?php if (!empty($error)): ?>
+            <div class="alert alert-danger alert-dismissible fade show" role="alert">
+                <i class="bi bi-exclamation-triangle me-2"></i>
+                <?= htmlspecialchars($error) ?>
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        <?php endif; ?>
+
         <!-- Quick Actions -->
         <div class="row g-3 mb-4 quick-actions">
             <div class="col-md-3">
@@ -784,7 +928,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 </button>
             </div>
         </div>
-        
+
         <!-- Estadísticas -->
         <div class="row mb-4">
             <div class="col-md-3">
@@ -808,7 +952,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <h6 class="card-title text-muted mb-1">Total Ingresos</h6>
-                                <h3 class="text-success mb-0"><?= formatMoney($stats['total_ingresos']) ?></h3>
+                                <h3 class="text-success mb-0"><?= formatMoney($stats['total_ingresos'], $user_currency) ?></h3>
                             </div>
                             <div class="metric-icon bg-success bg-opacity-10 text-success">
                                 <i class="bi bi-arrow-down-circle"></i>
@@ -823,7 +967,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <h6 class="card-title text-muted mb-1">Total Gastos</h6>
-                                <h3 class="text-danger mb-0"><?= formatMoney($stats['total_gastos']) ?></h3>
+                                <h3 class="text-danger mb-0"><?= formatMoney($stats['total_gastos'], $user_currency) ?></h3>
                             </div>
                             <div class="metric-icon bg-danger bg-opacity-10 text-danger">
                                 <i class="bi bi-arrow-up-circle"></i>
@@ -838,7 +982,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                         <div class="d-flex justify-content-between align-items-center">
                             <div>
                                 <h6 class="card-title text-muted mb-1">Balance</h6>
-                                <h3 class="text-warning mb-0"><?= formatMoney($stats['balance']) ?></h3>
+                                <h3 class="text-warning mb-0"><?= formatMoney($stats['balance'], $user_currency) ?></h3>
                             </div>
                             <div class="metric-icon bg-warning bg-opacity-10 text-warning">
                                 <i class="bi bi-graph-up"></i>
@@ -848,7 +992,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 </div>
             </div>
         </div>
-        
+
         <!-- Filtros -->
         <div class="card mb-4">
             <div class="card-body">
@@ -896,7 +1040,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                 </form>
             </div>
         </div>
-        
+
         <!-- Lista de transacciones -->
         <div class="card">
             <div class="card-body">
@@ -906,7 +1050,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                         <h3 class="mb-2">No se encontraron transacciones</h3>
                         <p class="text-muted mb-4">No hay transacciones que coincidan con los filtros seleccionados</p>
                         <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addTransactionModal">
-                            <i class="bi bi-plus-circle me-1"></i> Agregar Transacción
+                             Agregar Transacción
                         </button>
                     </div>
                 <?php else: ?>
@@ -953,35 +1097,28 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                                     <td class="text-end">
                                         <span class="amount <?= $tipoClase ?>">
                                             <?= $transaccion["tipo_categoria"] === "ingreso" ? '+' : '-' ?>
-                                            <?= formatMoney($transaccion["monto"]) ?>
+                                            <?= formatMoney($transaccion["monto"], $user_currency) ?>
                                         </span>
                                     </td>
                                     <td class="text-end">
-                                        <div class="dropdown">
-                                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="dropdown">
-                                                <i class="bi bi-three-dots-vertical"></i>
+                                        <div class="transaction-actions">
+                                            <button class="btn btn-outline-primary btn-action-individual edit-btn"
+                                                    data-bs-toggle="modal"
+                                                    data-bs-target="#editTransactionModal"
+                                                    data-id="<?= $transaccion["id"] ?>"
+                                                    data-categoria_id="<?= $transaccion["categoria_id"] ?>"
+                                                    data-monto="<?= $transaccion["monto"] / 100 ?>"
+                                                    data-descripcion="<?= htmlspecialchars($transaccion["descripcion"]) ?>"
+                                                    data-fecha="<?= $transaccion["fecha"] ?>"
+                                                    title="Editar transacción">
+                                                <i class="bi bi-pencil"></i>
                                             </button>
-                                            <ul class="dropdown-menu">
-                                                <li>
-                                                    <button class="dropdown-item edit-btn"
-                                                            data-bs-toggle="modal"
-                                                            data-bs-target="#editTransactionModal"
-                                                            data-id="<?= $transaccion["id"] ?>"
-                                                            data-categoria_id="<?= $transaccion["categoria_id"] ?>"
-                                                            data-monto="<?= $transaccion["monto"] / 100 ?>"
-                                                            data-descripcion="<?= htmlspecialchars($transaccion["descripcion"]) ?>"
-                                                            data-fecha="<?= $transaccion["fecha"] ?>">
-                                                        <i class="bi bi-pencil me-2"></i> Editar
-                                                    </button>
-                                                </li>
-                                                <li>
-                                                    <a class="dropdown-item text-danger"
-                                                       href="?delete=<?= $transaccion["id"] ?>&page=<?= $page ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>"
-                                                       onclick="return confirm('¿Estás seguro de eliminar esta transacción?\n\nEsta acción no se puede deshacer.')">
-                                                        <i class="bi bi-trash me-2"></i> Eliminar
-                                                    </a>
-                                                </li>
-                                            </ul>
+                                            <a class="btn btn-outline-danger btn-action-individual"
+                                               href="?delete=<?= $transaccion["id"] ?>&page=<?= $page ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>"
+                                               onclick="return confirm('¿Estás seguro de eliminar esta transacción?\n\nEsta acción no se puede deshacer.')"
+                                               title="Eliminar transacción">
+                                                <i class="bi bi-trash"></i>
+                                            </a>
                                         </div>
                                     </td>
                                 </tr>
@@ -989,6 +1126,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                             </tbody>
                         </table>
                     </div>
+
                     <!-- Paginación -->
                     <?php if ($totalPages > 1): ?>
                     <nav class="mt-4">
@@ -1000,6 +1138,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                                     </a>
                                 </li>
                             <?php endif; ?>
+
                             <?php for ($i = 1; $i <= $totalPages; $i++): ?>
                                 <li class="page-item <?= $i === $page ? 'active' : '' ?>">
                                     <a class="page-link" href="?page=<?= $i ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>">
@@ -1007,6 +1146,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                                     </a>
                                 </li>
                             <?php endfor; ?>
+
                             <?php if ($page < $totalPages): ?>
                                 <li class="page-item">
                                     <a class="page-link" href="?page=<?= $page + 1 ?>&categoria_id=<?= $filters['categoria_id'] ?>&tipo=<?= $filters['tipo'] ?>&fecha_desde=<?= $filters['fecha_desde'] ?>&fecha_hasta=<?= $filters['fecha_hasta'] ?>" aria-label="Siguiente">
@@ -1021,7 +1161,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             </div>
         </div>
     </div>
-    
+
     <!-- Modal para agregar nueva transacción -->
     <div class="modal fade" id="addTransactionModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
@@ -1032,15 +1172,16 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <form method="POST" action="">
+                <form method="POST" action="" id="addTransactionForm">
                     <div class="modal-body">
                         <div class="alert alert-info">
                             <i class="bi bi-info-circle me-2"></i>
-                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual) ?>
+                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual, $user_currency) ?>
                         </div>
+
                         <div class="mb-3">
-                            <label for="categoria_id" class="form-label">Categoría</label>
-                            <select class="form-select" id="categoria_id" name="categoria_id" required>
+                            <label for="add_categoria_id" class="form-label">Categoría</label>
+                            <select class="form-select" id="add_categoria_id" name="categoria_id" required>
                                 <option value="">Seleccionar Categoría</option>
                                 <?php foreach ($categorias as $categoria): ?>
                                     <option value="<?= $categoria["id"] ?>" data-tipo="<?= $categoria["tipo"] ?>">
@@ -1049,24 +1190,31 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                                 <?php endforeach; ?>
                             </select>
                         </div>
+
                         <div class="mb-3">
-                            <label for="monto" class="form-label">Monto (Guaraníes)</label>
-                            <input type="text" class="form-control" id="monto" name="monto" placeholder="Ej: 1.000.000" required>
-                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
+                            <label for="add_monto" class="form-label">Monto (<?= $user_currency ?>)</label>
+                            <input type="text" class="form-control money-input" id="add_monto" name="monto" placeholder="Ej: 1.000.000" required>
+                            <small class="text-muted">Ingrese el monto. Los puntos se agregarán automáticamente.</small>
+                            <div id="montoValidation" class="validation-message"></div>
+                            <div id="presupuestoAlert" class="presupuesto-alert" style="display: none;"></div>
                         </div>
+
                         <div class="mb-3">
-                            <label for="descripcion" class="form-label">Descripción</label>
-                            <textarea class="form-control" id="descripcion" name="descripcion" rows="2" placeholder="Descripción de la transacción" maxlength="255"></textarea>
+                            <label for="add_descripcion" class="form-label">Descripción</label>
+                            <textarea class="form-control" id="add_descripcion" name="descripcion" rows="2" placeholder="Descripción de la transacción" maxlength="255"></textarea>
                             <small class="text-muted">Máximo 255 caracteres</small>
                         </div>
+
                         <div class="mb-3">
-                            <label for="fecha" class="form-label">Fecha</label>
-                            <input class="form-control" type="date" id="fecha" name="fecha" required value="<?= date("Y-m-d") ?>">
+                            <label for="add_fecha" class="form-label">Fecha</label>
+                            <input class="form-control" type="date" id="add_fecha" name="fecha" required value="<?= date("Y-m-d") ?>">
+                            <small class="text-muted">No se permiten transacciones con más de 1 año de antigüedad o 7 días de anticipación</small>
+                            <div id="fechaValidation" class="validation-message"></div>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                        <button type="submit" class="btn btn-primary" name="create">
+                        <button type="submit" class="btn btn-primary" name="create" id="submitTransaction">
                             <i class="bi bi-save me-1"></i> Guardar Transacción
                         </button>
                     </div>
@@ -1074,7 +1222,7 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             </div>
         </div>
     </div>
-    
+
     <!-- Modal para editar transacción -->
     <div class="modal fade" id="editTransactionModal" tabindex="-1" aria-hidden="true">
         <div class="modal-dialog">
@@ -1085,13 +1233,14 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                     </h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <form method="POST" action="">
+                <form method="POST" action="" id="editTransactionForm">
                     <input type="hidden" id="edit_id" name="id">
                     <div class="modal-body">
                         <div class="alert alert-info">
                             <i class="bi bi-info-circle me-2"></i>
-                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual) ?>
+                            <strong>Saldo disponible:</strong> <?= formatMoney($saldoActual, $user_currency) ?>
                         </div>
+
                         <div class="mb-3">
                             <label for="edit_categoria_id" class="form-label">Categoría</label>
                             <select class="form-select" id="edit_categoria_id" name="categoria_id" required>
@@ -1103,24 +1252,29 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
                                 <?php endforeach; ?>
                             </select>
                         </div>
+
                         <div class="mb-3">
-                            <label for="edit_monto" class="form-label">Monto (Guaraníes)</label>
-                            <input type="text" class="form-control" id="edit_monto" name="monto" required>
-                            <small class="text-muted">Ingrese el monto en guaraníes. Use puntos para separar miles.</small>
+                            <label for="edit_monto" class="form-label">Monto (<?= $user_currency ?>)</label>
+                            <input type="text" class="form-control money-input" id="edit_monto" name="monto" required>
+                            <small class="text-muted">Ingrese el monto. Los puntos se agregarán automáticamente.</small>
+                            <div id="editMontoValidation" class="validation-message"></div>
                         </div>
+
                         <div class="mb-3">
                             <label for="edit_descripcion" class="form-label">Descripción</label>
                             <textarea class="form-control" id="edit_descripcion" name="descripcion" rows="2" maxlength="255"></textarea>
                             <small class="text-muted">Máximo 255 caracteres</small>
                         </div>
+
                         <div class="mb-3">
                             <label for="edit_fecha" class="form-label">Fecha</label>
                             <input class="form-control" type="date" id="edit_fecha" name="fecha" required>
+                            <div id="editFechaValidation" class="validation-message"></div>
                         </div>
                     </div>
                     <div class="modal-footer">
                         <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                        <button type="submit" class="btn btn-primary" name="update">
+                        <button type="submit" class="btn btn-primary" name="update" id="editSubmitBtn">
                             <i class="bi bi-save me-1"></i> Actualizar Transacción
                         </button>
                     </div>
@@ -1128,103 +1282,294 @@ $saldoActual = $transactionRepo->getSaldoActual($usuario_id);
             </div>
         </div>
     </div>
-    
+
     <!-- Bootstrap JS Bundle with Popper -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
     <script>
         document.addEventListener('DOMContentLoaded', function() {
+            // Función para formatear número con separadores de miles mientras se escribe
+            function formatNumberWithDots(input) {
+                const cursorPosition = input.selectionStart;
+                let value = input.value.replace(/\./g, '');
+                value = value.replace(/[^\d]/g, '');
+
+                let formattedValue = '';
+                for (let i = value.length - 1, j = 0; i >= 0; i--, j++) {
+                    if (j > 0 && j % 3 === 0) {
+                        formattedValue = '.' + formattedValue;
+                    }
+                    formattedValue = value[i] + formattedValue;
+                }
+
+                input.value = formattedValue;
+                const dotsAdded = (formattedValue.match(/\./g) || []).length;
+                const newCursorPosition = cursorPosition + dotsAdded;
+                input.setSelectionRange(newCursorPosition, newCursorPosition);
+            }
+
+            // Función para validar monto vs saldo y presupuesto
+            function validateTransaction(categoriaSelect, montoInput, fechaInput, validationDiv, submitBtn) {
+                const categoriaOption = categoriaSelect.options[categoriaSelect.selectedIndex];
+                const esGasto = categoriaOption && categoriaOption.dataset.tipo === 'gasto';
+                const montoValue = parseFloat(montoInput.value.replace(/\./g, '') || 0);
+                const userBalance = <?= $saldoActual ?>;
+
+                montoInput.classList.remove('is-invalid', 'is-valid');
+                validationDiv.innerHTML = '';
+                if (submitBtn) submitBtn.disabled = false;
+
+                if (montoValue > 0) {
+                    if (montoValue < 1) {
+                        validationDiv.innerHTML = `<div class="validation-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            El monto debe ser mayor a cero
+                        </div>`;
+                        montoInput.classList.add('is-invalid');
+                        if (submitBtn) submitBtn.disabled = true;
+                        return false;
+                    }
+
+                    if (montoValue > 1000000000000) {
+                        validationDiv.innerHTML = `<div class="validation-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            El monto es demasiado alto. Por favor, verifica el valor ingresado
+                        </div>`;
+                        montoInput.classList.add('is-invalid');
+                        if (submitBtn) submitBtn.disabled = true;
+                        return false;
+                    }
+
+                    if (esGasto && montoValue > userBalance) {
+                        const faltante = montoValue - userBalance;
+                        validationDiv.innerHTML = `<div class="validation-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            Saldo insuficiente. Disponible: ${(userBalance/100).toLocaleString('es-PY')} <?= $user_currency ?>.
+                            Faltan: ${(faltante/100).toLocaleString('es-PY')} <?= $user_currency ?>
+                        </div>`;
+                        montoInput.classList.add('is-invalid');
+                        if (submitBtn) submitBtn.disabled = true;
+                        return false;
+                    }
+
+                    if (fechaInput && fechaInput.value) {
+                        const fechaTransaccion = new Date(fechaInput.value);
+                        const fechaActual = new Date();
+                        const fechaUnAnioAtras = new Date();
+                        fechaUnAnioAtras.setFullYear(fechaActual.getFullYear() - 1);
+                        const fechaSieteDiasDespues = new Date();
+                        fechaSieteDiasDespues.setDate(fechaActual.getDate() + 7);
+
+                        if (fechaTransaccion < fechaUnAnioAtras) {
+                            validationDiv.innerHTML = `<div class="validation-error">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                No se pueden registrar transacciones con más de 1 año de antigüedad
+                            </div>`;
+                            if (submitBtn) submitBtn.disabled = true;
+                            return false;
+                        }
+
+                        if (fechaTransaccion > fechaSieteDiasDespues) {
+                            validationDiv.innerHTML = `<div class="validation-error">
+                                <i class="bi bi-exclamation-triangle"></i>
+                                No se pueden registrar transacciones con más de 7 días de anticipación
+                            </div>`;
+                            if (submitBtn) submitBtn.disabled = true;
+                            return false;
+                        }
+                    }
+
+                    if (esGasto && montoValue <= userBalance) {
+                        validationDiv.innerHTML = `<div class="validation-success">
+                            <i class="bi bi-check-circle"></i>
+                            Saldo suficiente para esta transacción
+                        </div>`;
+                        montoInput.classList.add('is-valid');
+                    } else if (!esGasto) {
+                        validationDiv.innerHTML = `<div class="validation-success">
+                            <i class="bi bi-check-circle"></i>
+                            Monto válido para ingreso
+                        </div>`;
+                        montoInput.classList.add('is-valid');
+                    }
+
+                    return true;
+                }
+
+                return false;
+            }
+
+            // Aplicar formato automático a los inputs de dinero mientras se escribe
+            document.querySelectorAll('.money-input').forEach(input => {
+                input.addEventListener('input', function(e) {
+                    formatNumberWithDots(this);
+
+                    if (this.id === 'add_monto') {
+                        validateTransaction(
+                            document.getElementById('add_categoria_id'),
+                            this,
+                            document.getElementById('add_fecha'),
+                            document.getElementById('montoValidation'),
+                            document.getElementById('submitTransaction')
+                        );
+                    } else if (this.id === 'edit_monto') {
+                        validateTransaction(
+                            document.getElementById('edit_categoria_id'),
+                            this,
+                            document.getElementById('edit_fecha'),
+                            document.getElementById('editMontoValidation'),
+                            document.getElementById('editSubmitBtn')
+                        );
+                    }
+                });
+
+                input.addEventListener('blur', function() {
+                    if (this.id === 'add_monto') {
+                        validateTransaction(
+                            document.getElementById('add_categoria_id'),
+                            this,
+                            document.getElementById('add_fecha'),
+                            document.getElementById('montoValidation'),
+                            document.getElementById('submitTransaction')
+                        );
+                    } else if (this.id === 'edit_monto') {
+                        validateTransaction(
+                            document.getElementById('edit_categoria_id'),
+                            this,
+                            document.getElementById('edit_fecha'),
+                            document.getElementById('editMontoValidation'),
+                            document.getElementById('editSubmitBtn')
+                        );
+                    }
+                });
+
+                if (input.value) {
+                    formatNumberWithDots(input);
+                }
+            });
+
             // Manejar edición de transacciones
             document.querySelectorAll('.edit-btn').forEach(button => {
                 button.addEventListener('click', function() {
                     document.getElementById('edit_id').value = this.dataset.id;
                     document.getElementById('edit_categoria_id').value = this.dataset.categoria_id;
-                    
-                    // Formatear monto para mostrar con separadores de miles
+
                     const monto = parseFloat(this.dataset.monto);
-                    document.getElementById('edit_monto').value = monto.toLocaleString('es-PY');
-                    
+                    const montoInput = document.getElementById('edit_monto');
+                    montoInput.value = monto.toLocaleString('es-PY');
+
                     document.getElementById('edit_descripcion').value = this.dataset.descripcion;
                     document.getElementById('edit_fecha').value = this.dataset.fecha;
+
+                    setTimeout(() => {
+                        validateTransaction(
+                            document.getElementById('edit_categoria_id'),
+                            montoInput,
+                            document.getElementById('edit_fecha'),
+                            document.getElementById('editMontoValidation'),
+                            document.getElementById('editSubmitBtn')
+                        );
+                    }, 100);
                 });
             });
-            
-            // Formatear input de monto para aceptar solo números y puntos
-            document.querySelectorAll('input[name="monto"], #edit_monto').forEach(input => {
-                input.addEventListener('input', function() {
-                    // Permitir solo números y puntos
-                    this.value = this.value.replace(/[^\d.]/g, '');
-                    
-                    // Evitar múltiples puntos
-                    const parts = this.value.split('.');
-                    if (parts.length > 2) {
-                        this.value = parts[0] + '.' + parts.slice(1).join('');
-                    }
-                });
-                
-                input.addEventListener('blur', function() {
-                    if (this.value) {
-                        // Formatear con separadores de miles
-                        const number = parseFloat(this.value.replace(/\./g, ''));
-                        if (!isNaN(number)) {
-                            this.value = number.toLocaleString('es-PY');
-                        }
-                    }
-                });
+
+            // Validar cambios en categoría y fecha
+            document.getElementById('add_categoria_id')?.addEventListener('change', function() {
+                validateTransaction(
+                    this,
+                    document.getElementById('add_monto'),
+                    document.getElementById('add_fecha'),
+                    document.getElementById('montoValidation'),
+                    document.getElementById('submitTransaction')
+                );
             });
-            
+
+            document.getElementById('add_fecha')?.addEventListener('change', function() {
+                validateTransaction(
+                    document.getElementById('add_categoria_id'),
+                    document.getElementById('add_monto'),
+                    this,
+                    document.getElementById('montoValidation'),
+                    document.getElementById('submitTransaction')
+                );
+
+                const fechaValidation = document.getElementById('fechaValidation');
+                if (this.value) {
+                    const fechaTransaccion = new Date(this.value);
+                    const fechaActual = new Date();
+                    const fechaUnAnioAtras = new Date();
+                    fechaUnAnioAtras.setFullYear(fechaActual.getFullYear() - 1);
+                    const fechaSieteDiasDespues = new Date();
+                    fechaSieteDiasDespues.setDate(fechaActual.getDate() + 7);
+
+                    if (fechaTransaccion < fechaUnAnioAtras) {
+                        fechaValidation.innerHTML = `<div class="validation-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            No se pueden registrar transacciones con más de 1 año de antigüedad
+                        </div>`;
+                    } else if (fechaTransaccion > fechaSieteDiasDespues) {
+                        fechaValidation.innerHTML = `<div class="validation-error">
+                            <i class="bi bi-exclamation-triangle"></i>
+                            No se pueden registrar transacciones con más de 7 días de anticipación
+                        </div>`;
+                    } else {
+                        fechaValidation.innerHTML = `<div class="validation-success">
+                            <i class="bi bi-check-circle"></i>
+                            Fecha válida
+                        </div>`;
+                    }
+                }
+            });
+
             // Validar formulario antes de enviar
             document.querySelectorAll('form').forEach(form => {
                 form.addEventListener('submit', function(e) {
                     const montoInput = this.querySelector('input[name="monto"]');
                     if (montoInput) {
-                        // Limpiar el valor para enviar solo números
                         montoInput.value = montoInput.value.replace(/\./g, '');
+                    }
+
+                    if (this.id === 'addTransactionForm') {
+                        const isValid = validateTransaction(
+                            document.getElementById('add_categoria_id'),
+                            document.getElementById('add_monto'),
+                            document.getElementById('add_fecha'),
+                            document.getElementById('montoValidation'),
+                            document.getElementById('submitTransaction')
+                        );
+
+                        if (!isValid) {
+                            e.preventDefault();
+                            alert('Por favor, corrige los errores antes de enviar el formulario.');
+                        }
                     }
                 });
             });
-            
-            // Validación en tiempo real para gastos
-            const categoriaSelect = document.getElementById('categoria_id');
-            const montoInput = document.getElementById('monto');
-            const editCategoriaSelect = document.getElementById('edit_categoria_id');
-            const editMontoInput = document.getElementById('edit_monto');
-            
-            function validarGastoEnTiempoReal(categoriaSelect, montoInput) {
-                if (!categoriaSelect || !montoInput) return;
-                
-                const categoriaOption = categoriaSelect.options[categoriaSelect.selectedIndex];
-                const esGasto = categoriaOption && categoriaOption.dataset.tipo === 'gasto';
-                
-                if (esGasto && montoInput.value) {
-                    const monto = parseFloat(montoInput.value.replace(/\./g, ''));
-                    const saldoActual = <?= $saldoActual ?>;
-                    
-                    if (monto > saldoActual) {
-                        montoInput.classList.add('is-invalid');
-                        // Mostrar mensaje de error
-                        let errorElement = montoInput.nextElementSibling;
-                        if (!errorElement || !errorElement.classList.contains('invalid-feedback')) {
-                            errorElement = document.createElement('div');
-                            errorElement.className = 'invalid-feedback';
-                            montoInput.parentNode.appendChild(errorElement);
-                        }
-                        errorElement.innerHTML = `Saldo insuficiente. Disponible: ${(saldoActual/100).toLocaleString('es-PY')}. Faltan: ${((monto - saldoActual)/100).toLocaleString('es-PY')}`;
-                    } else {
-                        montoInput.classList.remove('is-invalid');
-                    }
-                } else {
-                    montoInput.classList.remove('is-invalid');
-                }
+
+            // Configurar fecha máxima y mínima según triggers
+            const fechaInput = document.getElementById('add_fecha');
+            const editFechaInput = document.getElementById('edit_fecha');
+
+            if (fechaInput) {
+                const hoy = new Date();
+                const maxFecha = new Date();
+                maxFecha.setDate(hoy.getDate() + 7);
+                const minFecha = new Date();
+                minFecha.setFullYear(hoy.getFullYear() - 1);
+
+                fechaInput.max = maxFecha.toISOString().split('T')[0];
+                fechaInput.min = minFecha.toISOString().split('T')[0];
             }
-            
-            if (categoriaSelect && montoInput) {
-                categoriaSelect.addEventListener('change', () => validarGastoEnTiempoReal(categoriaSelect, montoInput));
-                montoInput.addEventListener('input', () => validarGastoEnTiempoReal(categoriaSelect, montoInput));
-            }
-            
-            if (editCategoriaSelect && editMontoInput) {
-                editCategoriaSelect.addEventListener('change', () => validarGastoEnTiempoReal(editCategoriaSelect, editMontoInput));
-                editMontoInput.addEventListener('input', () => validarGastoEnTiempoReal(editCategoriaSelect, editMontoInput));
+
+            if (editFechaInput) {
+                const hoy = new Date();
+                const maxFecha = new Date();
+                maxFecha.setDate(hoy.getDate() + 7);
+                const minFecha = new Date();
+                minFecha.setFullYear(hoy.getFullYear() - 1);
+
+                editFechaInput.max = maxFecha.toISOString().split('T')[0];
+                editFechaInput.min = minFecha.toISOString().split('T')[0];
             }
         });
     </script>

@@ -158,41 +158,54 @@ class CategoryRepository {
     }
 
     public function create($data) {
-        $stmt = $this->db->prepare("
-            INSERT INTO categorias (usuario_id, nombre, tipo, icono, color, creado_en, actualizado_en)
-            VALUES (:usuario_id, :nombre, :tipo, :icono, :color, NOW(), NOW())
-        ");
-        return $stmt->execute($data);
+        try {
+            $stmt = $this->db->prepare("
+                INSERT INTO categorias (usuario_id, nombre, tipo, icono, color, creado_en, actualizado_en)
+                VALUES (:usuario_id, :nombre, :tipo, :icono, :color, NOW(), NOW())
+            ");
+            return $stmt->execute($data);
+        } catch (PDOException $e) {
+            // Manejar error de categoría duplicada
+            if (strpos($e->getMessage(), 'Ya existe una categoría') !== false) {
+                throw new Exception('Ya existe una categoría con este nombre y tipo para tu usuario.');
+            }
+            throw $e;
+        }
     }
 
     public function update($id, $data) {
-        $data['id'] = $id;
-        $stmt = $this->db->prepare("
-            UPDATE categorias SET
-                nombre = :nombre,
-                tipo = :tipo,
-                icono = :icono,
-                color = :color,
-                actualizado_en = NOW()
-            WHERE id = :id AND usuario_id = :usuario_id
-        ");
-        return $stmt->execute($data);
+        try {
+            $data['id'] = $id;
+            $stmt = $this->db->prepare("
+                UPDATE categorias SET
+                    nombre = :nombre,
+                    tipo = :tipo,
+                    icono = :icono,
+                    color = :color,
+                    actualizado_en = NOW()
+                WHERE id = :id AND usuario_id = :usuario_id
+            ");
+            return $stmt->execute($data);
+        } catch (PDOException $e) {
+            // Manejar error de categoría duplicada
+            if (strpos($e->getMessage(), 'Ya existe una categoría') !== false) {
+                throw new Exception('Ya existe una categoría con este nombre y tipo para tu usuario.');
+            }
+            throw $e;
+        }
     }
 
     public function delete($id, $userId) {
-        // Verificar si la categoría tiene transacciones antes de eliminar
-        $stmt = $this->db->prepare("
-            SELECT COUNT(*) FROM transacciones WHERE categoria_id = :id
-        ");
-        $stmt->execute([':id' => $id]);
-        $hasTransactions = $stmt->fetchColumn() > 0;
-
-        if ($hasTransactions) {
-            return false; // No se puede eliminar categoría con transacciones
+        try {
+            $stmt = $this->db->prepare("DELETE FROM categorias WHERE id = :id AND usuario_id = :usuario_id");
+            return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
+        } catch (PDOException $e) {
+            // Manejar error de trigger que previene eliminación
+            if (strpos($e->getMessage(), 'No se puede eliminar una categoría con transacciones asociadas') !== false) {
+                return false; // No se puede eliminar por tener transacciones
+            }
+            throw $e;
         }
-
-        $stmt = $this->db->prepare("DELETE FROM categorias WHERE id = :id AND usuario_id = :usuario_id");
-        return $stmt->execute(['id' => $id, 'usuario_id' => $userId]);
     }
 
     public function getMostUsedCategories($userId, $limit = 5) {
@@ -209,6 +222,15 @@ class CategoryRepository {
         $stmt->bindValue(':limit', $limit, PDO::PARAM_INT);
         $stmt->execute();
         return $stmt->fetchAll();
+    }
+
+    // Método para verificar si una categoría tiene transacciones
+    public function hasTransactions($categoryId) {
+        $stmt = $this->db->prepare("
+            SELECT COUNT(*) FROM transacciones WHERE categoria_id = :id
+        ");
+        $stmt->execute([':id' => $categoryId]);
+        return $stmt->fetchColumn() > 0;
     }
 }
 
@@ -248,7 +270,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
             $_SESSION['success'] = 'Categoría actualizada exitosamente';
         }
     } catch (Exception $e) {
-        $error = 'Error al procesar la operación: ' . $e->getMessage();
+        $error = $e->getMessage();
     }
     
     header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query($_GET));
@@ -258,12 +280,20 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
 // Eliminar categoría
 if ($_SERVER["REQUEST_METHOD"] === "GET" && isset($_GET["delete"])) {
     $id = intval($_GET["delete"]);
-    $successDelete = $categoryRepo->delete($id, $usuario_id);
     
-    if ($successDelete) {
-        $_SESSION['success'] = 'Categoría eliminada exitosamente';
+    // Verificar si la categoría tiene transacciones
+    $hasTransactions = $categoryRepo->hasTransactions($id);
+    
+    if ($hasTransactions) {
+        $_SESSION['error'] = 'No se puede eliminar esta categoría porque tiene transacciones asociadas. Primero elimina o reasigna las transacciones antes de eliminar la categoría.';
     } else {
-        $_SESSION['error'] = 'No se puede eliminar una categoría que tiene transacciones asociadas';
+        $successDelete = $categoryRepo->delete($id, $usuario_id);
+        
+        if ($successDelete) {
+            $_SESSION['success'] = 'Categoría eliminada exitosamente';
+        } else {
+            $_SESSION['error'] = 'No se puede eliminar la categoría. Asegúrate de que no tenga transacciones asociadas.';
+        }
     }
     
     header("Location: " . $_SERVER["PHP_SELF"] . "?" . http_build_query(array_diff_key($_GET, ['delete' => ''])));
@@ -546,6 +576,8 @@ $user_currency = $stmt->fetchColumn();
             right: 1rem;
             opacity: 0;
             transition: all 0.3s ease;
+            display: flex;
+            gap: 0.5rem;
         }
         
         .category-card:hover .category-actions {
@@ -560,6 +592,7 @@ $user_currency = $stmt->fetchColumn();
             justify-content: center;
             border-radius: 0.5rem;
             transition: all 0.2s ease;
+            font-size: 0.875rem;
         }
         
         .quick-actions .btn {
@@ -634,6 +667,28 @@ $user_currency = $stmt->fetchColumn();
         .text-blue { color: var(--bs-blue) !important; }
         .text-cyan { color: var(--bs-cyan) !important; }
         .text-yellow { color: var(--bs-yellow) !important; }
+        
+        .btn-action-edit {
+            background-color: rgba(var(--bs-primary-rgb), 0.1);
+            border: 1px solid rgba(var(--bs-primary-rgb), 0.2);
+            color: var(--bs-primary);
+        }
+        
+        .btn-action-edit:hover {
+            background-color: var(--bs-primary);
+            color: white;
+        }
+        
+        .btn-action-delete {
+            background-color: rgba(var(--bs-danger-rgb), 0.1);
+            border: 1px solid rgba(var(--bs-danger-rgb), 0.2);
+            color: var(--bs-danger);
+        }
+        
+        .btn-action-delete:hover {
+            background-color: var(--bs-danger);
+            color: white;
+        }
         
         @media (max-width: 768px) {
             .stats-grid {
@@ -870,7 +925,7 @@ $user_currency = $stmt->fetchColumn();
                                 <h3 class="mb-2">No se encontraron categorías</h3>
                                 <p class="text-muted mb-4">No hay categorías que coincidan con los filtros seleccionados</p>
                                 <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCategoryModal">
-                                    <i class="bi bi-plus-circle me-1"></i> Agregar Categoría
+                                     Agregar Categoría
                                 </button>
                             </div>
                         <?php else: ?>
@@ -879,33 +934,25 @@ $user_currency = $stmt->fetchColumn();
                                 <div class="col">
                                     <div class="card category-card h-100 <?= $categoria["tipo"] ?>">
                                         <div class="card-body">
+                                            <!-- Botones de acción individuales -->
                                             <div class="category-actions">
-                                                <div class="dropdown">
-                                                    <button class="btn btn-sm btn-outline-secondary btn-action" type="button" data-bs-toggle="dropdown">
-                                                        <i class="bi bi-three-dots-vertical"></i>
-                                                    </button>
-                                                    <ul class="dropdown-menu">
-                                                        <li>
-                                                            <button class="dropdown-item edit-btn"
-                                                                    data-bs-toggle="modal"
-                                                                    data-bs-target="#editCategoryModal"
-                                                                    data-id="<?= $categoria["id"] ?>"
-                                                                    data-nombre="<?= htmlspecialchars($categoria["nombre"]) ?>"
-                                                                    data-tipo="<?= $categoria["tipo"] ?>"
-                                                                    data-icono="<?= $categoria["icono"] ?>"
-                                                                    data-color="<?= $categoria["color"] ?>">
-                                                                <i class="bi bi-pencil me-2"></i> Editar
-                                                            </button>
-                                                        </li>
-                                                        <li>
-                                                            <a class="dropdown-item text-danger"
-                                                               href="?<?= http_build_query(array_merge($_GET, ['delete' => $categoria["id"]])) ?>"
-                                                               onclick="return confirm('¿Estás seguro de eliminar esta categoría?\n\n<?= $categoria['total_transacciones'] > 0 ? 'ADVERTENCIA: Esta categoría tiene ' . $categoria['total_transacciones'] . ' transacción(es) asociada(s) y no se puede eliminar.' : 'Esta acción no se puede deshacer.' ?>')">
-                                                                <i class="bi bi-trash me-2"></i> Eliminar
-                                                            </a>
-                                                        </li>
-                                                    </ul>
-                                                </div>
+                                                <button class="btn btn-sm btn-action btn-action-edit edit-btn"
+                                                        data-bs-toggle="modal"
+                                                        data-bs-target="#editCategoryModal"
+                                                        data-id="<?= $categoria["id"] ?>"
+                                                        data-nombre="<?= htmlspecialchars($categoria["nombre"]) ?>"
+                                                        data-tipo="<?= $categoria["tipo"] ?>"
+                                                        data-icono="<?= $categoria["icono"] ?>"
+                                                        data-color="<?= $categoria["color"] ?>"
+                                                        title="Editar categoría">
+                                                    <i class="bi bi-pencil"></i>
+                                                </button>
+                                                <a class="btn btn-sm btn-action btn-action-delete"
+                                                   href="?<?= http_build_query(array_merge($_GET, ['delete' => $categoria["id"]])) ?>"
+                                                   onclick="return confirmDelete(<?= $categoria['id'] ?>, '<?= htmlspecialchars($categoria['nombre']) ?>', <?= $categoria['total_transacciones'] ?>)"
+                                                   title="Eliminar categoría">
+                                                    <i class="bi bi-trash"></i>
+                                                </a>
                                             </div>
                                             
                                             <div class="text-center mb-3">
@@ -1115,6 +1162,21 @@ $user_currency = $stmt->fetchColumn();
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
     <script>
+        // Función mejorada para confirmar eliminación
+        function confirmDelete(categoryId, categoryName, transactionCount) {
+            if (transactionCount > 0) {
+                const message = `⚠️ NO SE PUEDE ELIMINAR\n\n` +
+                              `La categoría "${categoryName}" tiene ${transactionCount} transacción(es) asociada(s).\n\n` +
+                              `Para eliminar esta categoría:\n` +
+                              `1. Primero elimina o reasigna las transacciones\n` +
+                              `2. Luego podrás eliminar la categoría`;
+                alert(message);
+                return false;
+            } else {
+                return confirm(`¿Estás seguro de eliminar la categoría "${categoryName}"?\n\nEsta acción no se puede deshacer.`);
+            }
+        }
+
         document.addEventListener('DOMContentLoaded', function() {
             // Manejar edición de categorías
             document.querySelectorAll('.edit-btn').forEach(button => {
