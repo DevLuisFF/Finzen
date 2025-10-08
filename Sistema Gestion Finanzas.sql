@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Servidor: 127.0.0.1
--- Tiempo de generación: 06-10-2025 a las 06:57:47
+-- Tiempo de generación: 08-10-2025 a las 04:52:42
 -- Versión del servidor: 10.4.32-MariaDB
 -- Versión de PHP: 8.2.12
 
@@ -48,8 +48,9 @@ INSERT INTO `categorias` (`id`, `usuario_id`, `nombre`, `tipo`, `icono`, `color`
 (4, 1, 'servicios', 'gasto', 'bi-phone', '#FF6384', '2025-09-29 18:03:46', '2025-09-30 02:44:53'),
 (6, 1, 'test3', 'ingreso', 'bi-cash-coin', '#FF6384', '2025-10-01 23:02:40', '2025-10-01 23:02:40'),
 (7, 1, 'Alquiler', 'gasto', 'bi-house', '#9966FF', '2025-10-01 23:17:59', '2025-10-01 23:17:59'),
-(8, 3, 'Salario', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-10-06 02:59:05', '2025-10-06 02:59:05'),
-(9, 3, 'Transporte Publico', 'gasto', 'bi-car-front', '#FF6384', '2025-10-06 04:23:47', '2025-10-06 04:23:56');
+(8, 3, 'Salario Mensual', 'ingreso', 'bi-cash-coin', '#8AC24A', '2025-10-06 02:59:05', '2025-10-08 02:36:09'),
+(11, 3, 'Internet Hogar', 'gasto', 'bi-wifi', '#F06292', '2025-10-06 23:47:39', '2025-10-08 02:27:46'),
+(12, 3, 'Barberia', 'gasto', 'bi-bag', '#4BC0C0', '2025-10-08 02:47:06', '2025-10-08 02:47:21');
 
 --
 -- Disparadores `categorias`
@@ -128,7 +129,7 @@ CREATE TABLE `presupuestos` (
 INSERT INTO `presupuestos` (`id`, `usuario_id`, `categoria_id`, `monto`, `periodo`, `fecha_inicio`, `fecha_fin`, `notificacion`, `creado_en`, `actualizado_en`) VALUES
 (6, 1, 3, 200000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:04:23', '2025-09-30 03:14:10'),
 (7, 1, 4, 500000, 'mensual', '2025-09-30', NULL, 1, '2025-09-30 00:37:08', '2025-09-30 00:37:08'),
-(8, 3, 9, 10000000, 'mensual', '2025-10-06', '2025-11-06', 1, '2025-10-06 04:47:53', '2025-10-06 04:47:53');
+(10, 3, 11, 15000000, 'mensual', '2025-10-08', '2025-11-08', 1, '2025-10-08 02:28:23', '2025-10-08 02:28:23');
 
 --
 -- Disparadores `presupuestos`
@@ -319,7 +320,9 @@ CREATE TABLE `transacciones` (
 --
 
 INSERT INTO `transacciones` (`id`, `usuario_id`, `categoria_id`, `monto`, `descripcion`, `fecha`, `recurrente`, `creado_en`, `actualizado_en`) VALUES
-(12, 3, 8, 300000000, 'Salario mensual', '2025-10-06', 0, '2025-10-06 03:13:07', '2025-10-06 03:13:07');
+(13, 3, 8, 350000000, 'Salario Mensual', '2025-10-07', 0, '2025-10-06 22:54:01', '2025-10-08 02:26:50'),
+(17, 3, 11, 10000000, 'Pago Internet Hogar', '2025-10-08', 0, '2025-10-08 02:28:55', NULL),
+(18, 3, 12, 3500000, 'Corte De Pelo', '2025-10-08', 0, '2025-10-08 02:47:53', NULL);
 
 --
 -- Disparadores `transacciones`
@@ -683,7 +686,7 @@ CREATE TABLE `usuarios` (
 INSERT INTO `usuarios` (`id`, `nombre_usuario`, `correo_electronico`, `hash_contraseña`, `rol_id`, `saldo`, `moneda`, `activo`, `creado_en`, `actualizado_en`) VALUES
 (1, 'luis', 'luis12ferreirafranco@gmail.com', '$2y$10$gB6b7G1T2pbwdFa6zQ6DIO03QV5bRLuOQPvY4HcP72pxEWMRo/0AK', 2, 0, 'PYG', 1, '2025-09-15 01:18:33', '2025-10-03 22:30:45'),
 (2, 'testuser', 'testuser@gmail.com', '$2y$12$YZy9AAVO2zTD4RZcTFYnx.6FYAPCJWFWvfq68ifU4/H5R8SoIsTd2', 1, 0, 'PYG', 1, '2025-09-15 02:07:33', '2025-10-03 22:30:45'),
-(3, 'demo', 'demoemail@gmail.com', '$2y$10$1n9MPXZnFKf.kNBZaC28repW//jfwnmiH.ouemmKAcFRbXMZv2aL2', 2, 300000000, 'PYG', 1, '2025-09-29 17:05:41', '2025-10-06 03:13:07');
+(3, 'demo', 'demoemail@gmail.com', '$2y$10$1n9MPXZnFKf.kNBZaC28repW//jfwnmiH.ouemmKAcFRbXMZv2aL2', 2, 336500000, 'PYG', 1, '2025-09-29 17:05:41', '2025-10-08 02:47:53');
 
 --
 -- Disparadores `usuarios`
@@ -799,13 +802,13 @@ ALTER TABLE `usuarios`
 -- AUTO_INCREMENT de la tabla `categorias`
 --
 ALTER TABLE `categorias`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=10;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
 
 --
 -- AUTO_INCREMENT de la tabla `presupuestos`
 --
 ALTER TABLE `presupuestos`
-  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=9;
+  MODIFY `id` int(10) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=11;
 
 --
 -- AUTO_INCREMENT de la tabla `roles`
@@ -817,7 +820,7 @@ ALTER TABLE `roles`
 -- AUTO_INCREMENT de la tabla `transacciones`
 --
 ALTER TABLE `transacciones`
-  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=13;
+  MODIFY `id` bigint(20) UNSIGNED NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=19;
 
 --
 -- AUTO_INCREMENT de la tabla `usuarios`
